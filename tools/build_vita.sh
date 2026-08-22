@@ -26,6 +26,7 @@ vita-pack-vpk -s /build/param.sfo -b /build/gflvn.self /build/gflvn.vpk \
     -a "$STAGE/scene.ir.json=scene.ir.json" \
     -a "$STAGE/img=img" \
     -a "$STAGE/aud=aud" \
-    -a "$STAGE/fonts=fonts"
+    -a "$STAGE/fonts=fonts" \
+    -a "/src/runtime/sce_sys=sce_sys"
 
 echo "vpk: /build/gflvn.vpk"

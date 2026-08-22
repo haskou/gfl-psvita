@@ -13,6 +13,6 @@ research/
 assets/
 tmp/
 
-# local-only: research notes and investigation docs
-docs/
+# local-only: research notes + investigation write-up
+docs/investigation.md
 build/

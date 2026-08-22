@@ -12,3 +12,6 @@ research/
 # extracted game content + downloaded bundles (game assets are not distributed)
 assets/
 tmp/
+
+# local-only: research notes and investigation docs
+docs/

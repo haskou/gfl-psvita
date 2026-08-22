@@ -5,7 +5,7 @@ scripts (`avgtxt` format, inside Unity TextAssets) into a portable intermediate
 representation, then replays them with a portable C++/SDL2 runtime — desktop
 first, cross-compiled to Vita.
 
-Design rationale and evidence base: [docs/investigation.md](docs/investigation.md).
+Design rationale lives in a local investigation document (not distributed).
 
 ## Status
 

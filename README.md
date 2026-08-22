@@ -23,6 +23,7 @@ Design rationale and evidence base: [docs/investigation.md](docs/investigation.m
 src/gflvn/
   avgtxt.py    # parser: one script line = one beat; unknown tags degrade, never fail
   assets.py    # resolver: beat references -> asset keys against the text mirror
+  ir.py        # exporter: beats -> normalized scene JSON (investigation §4 schema)
 test_*.py      # plain assert suites, no framework
 tests/golden/  # golden parse output for -1-1-1.txt
 research/      # local clones of Dimbreath/GirlsFrontlineData + gfStory-en (not committed)

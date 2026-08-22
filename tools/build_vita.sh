@@ -17,8 +17,15 @@ done
 cp runtime/fonts/NotoSans-Regular.ttf "$STAGE/fonts/"
 
 cmake -B /build -S runtime \
-    -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
-    -DVPKDATA="$STAGE" > /dev/null
+    -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" > /dev/null
 make -C /build -j"$(nproc)"
+
+vita-mksfoex -s TITLE_ID=GFLVN00001 -s APP_VER="00.10" "GFL VN" /build/param.sfo
+vita-pack-vpk -s /build/param.sfo -b /build/gflvn.self /build/gflvn.vpk \
+    -a "$STAGE/manifest.json=manifest.json" \
+    -a "$STAGE/scene.ir.json=scene.ir.json" \
+    -a "$STAGE/img=img" \
+    -a "$STAGE/aud=aud" \
+    -a "$STAGE/fonts=fonts"
 
 echo "vpk: /build/gflvn.vpk"

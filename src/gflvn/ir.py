@@ -4,7 +4,20 @@ Schema follows docs/investigation.md section 4: renderer keeps no GFL knowledge;
 asset refs are opaque keys resolved later; <分支> gating rides along as a `gate`
 field until step 05 flattens it into label/jumpif pairs.
 """
+from pathlib import Path
+
 from .assets import resolve_scene
+
+
+def slug(name: str) -> str:
+    """ASCII-safe asset key component: lowercase alnum kept, rest hex-escaped."""
+    out = []
+    for ch in name.lower():
+        if ch.isascii() and (ch.isalnum() or ch == "_"):
+            out.append(ch)
+        else:
+            out.append("u" + ch.encode("utf-8").hex())
+    return "".join(out)
 
 
 def _speaker(beat):
@@ -22,9 +35,9 @@ def _stage_diff(prev_cast, cast):
     cur = {(c["name"].lower(), c["expr"] or 0) for c in cast if c["name"]}
     events = []
     for who in prev - cur:
-        events.append({"t": "hide", "char": who[0]})
+        events.append({"t": "hide", "char": slug(who[0])})
     for who in cur - prev:
-        events.append({"t": "show", "char": who[0], "expr": who[1]})
+        events.append({"t": "show", "char": slug(who[0]), "expr": who[1]})
     return events
 
 
@@ -88,7 +101,7 @@ def to_ir(doc: dict, profiles: list[str]) -> dict:
                 "t": "say",
                 "name": _speaker(beat),
                 "text": beat["text"],
-                "chars": [[c["name"].lower(), c["expr"] or 0] for c in beat["cast"] if c["name"]],
+                "chars": [[slug(c["name"]), c["expr"] or 0] for c in beat["cast"] if c["name"]],
             }
             if fx.get("分支"):
                 say["gate"] = int(fx["分支"])  # step 05 flattens this into jumpif

@@ -8,19 +8,26 @@ add_executable(gflvn main.cpp)
 target_include_directories(gflvn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(VITA)
-  # vitasdk: ports install flat libs, no cmake config files
-  target_link_libraries(gflvn PRIVATE
-      SDL2_image SDL2_mixer SDL2_ttf SDL2
-      stdc++
-  )
+  include("${VITASDK}/share/vita.cmake" REQUIRED)
+  # vitasdk: ports install flat libs + headers under include/<lib>, no cmake configs
+  target_include_directories(gflvn PRIVATE
+      $ENV{VITASDK}/arm-vita-eabi/include/SDL2
+      $ENV{VITASDK}/arm-vita-eabi/include/SDL2_image
+      $ENV{VITASDK}/arm-vita-eabi/include/SDL2_mixer
+      $ENV{VITASDK}/arm-vita-eabi/include/SDL2_ttf)
+  set(VITA_LIBS
+      SDL2_image SDL2_ttf SDL2_mixer SDL2
+      webpdemux webpmux webp jpeg png16 z bz2
+      freetype harfbuzz
+      modplug mpg123 xmp opusfile opus vorbisfile vorbis FLAC ogg
+      vita2d
+      SceGxm_stub SceDisplay_stub SceAppMgr_stub SceAppUtil_stub
+      SceTouch_stub SceCommonDialog_stub SceAudio_stub SceCtrl_stub SceSysmodule_stub
+      SceAudioIn_stub SceHid_stub SceMotion_stub
+      pthread m stdc++)
+  target_link_libraries(gflvn PRIVATE -Wl,--start-group ${VITA_LIBS} -Wl,--end-group)
   vita_create_self(gflvn.self gflvn)
-  vita_create_vpk(gflvn.vpk GFLVN00001 gflvn.self
-      FILE ${VPKDATA}/manifest.json manifest.json
-      FILE ${VPKDATA}/scene.ir.json scene.ir.json
-      FILE ${VPKDATA}/fonts/NotoSans-Regular.ttf fonts/NotoSans-Regular.ttf
-      DIR ${VPKDATA}/img img
-      DIR ${VPKDATA}/aud aud
-  )
+  # vpk packaging happens in tools/build_vita.sh (vita-pack-vpk handles dirs)
 else()
   find_package(SDL2 REQUIRED)
   find_package(SDL2_image REQUIRED)

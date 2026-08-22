@@ -18,6 +18,9 @@ import zipfile
 from pathlib import Path
 
 import UnityPy
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src"))
+from gflvn.ir import slug  # same ASCII key derivation as the exporter
 BUNDLES = Path("assets/bundles")
 IMG = Path("assets/img")
 AUD = Path("assets/aud")
@@ -164,12 +167,12 @@ def extract_sprites(cast):
         if not pics:
             print(f"WARN sprite {pname}[{expr}] pic path_id {pid} missing", file=sys.stderr)
             continue
-        dest = IMG / f"spr_{name}_{expr}.png"
+        dest = IMG / f"spr_{slug(name)}_{expr}.png"
         if alphas and alphas[0].path_id != pics[0].path_id:
             merge_alpha(pics[0], alphas[0], dest)
         else:
             save_png(obj_image(pics[0]), dest)
-        out[f"spr_{name}_{expr}"] = str(dest)
+        out[f"spr_{slug(name)}_{expr}"] = str(dest)
     return out
 
 

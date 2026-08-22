@@ -9,7 +9,7 @@ SCENE = "1-1-1"
 
 
 def test_manifest_complete():
-    scene = json.loads((ROOT / f"assets/{SCENE}.ir.json").read_text())
+    scene = json.loads((ROOT / f"assets/scene.ir.json").read_text())
     manifest = json.loads((ROOT / "assets/manifest.json").read_text())
 
     def key_of(ev_id):

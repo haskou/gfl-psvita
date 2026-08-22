@@ -15,6 +15,7 @@ Design rationale lives in a local investigation document (not distributed).
 | 02 | asset resolver v0 (BIN/BGM/SE/sprites -> keys + warnings) | done |
 | 02b | bundle download + UnityPy extraction (docker toolchain) | done |
 | 03 | IR exporter: beats -> flat event-stream scene JSON | done |
+| 04 | C++/SDL2 player (desktop + Vita from one source) | done, desktop verified headless |
 | 04+ | C++/SDL2 desktop player, then Vita build | — |
 
 ## Layout
@@ -24,10 +25,14 @@ src/gflvn/
   avgtxt.py    # parser: one script line = one beat; unknown tags degrade, never fail
   assets.py    # resolver: beat references -> asset keys against the text mirror
   ir.py        # exporter: beats -> normalized scene JSON (investigation §4 schema)
+runtime/       # SDL2 VN player (single portable main.cpp; builds desktop & Vita)
+docker/
+  Dockerfile         # extraction toolchain image
+  Dockerfile.vita    # VitaSDK cross-compile image
 tools/
   fetch_bundles.py    # stdlib-only CDN downloader (gf-data-tools resdata manifests)
   extract_assets.py   # bundle -> pngs/oggs (runs inside docker: UnityPy+magick+vgmstream)
-docker/Dockerfile     # extraction toolchain image
+  build_vita.sh       # cross-builds gflvn.vpk (runs inside gflvn-build-vita)
 test_*.py      # plain assert suites, no framework
 tests/golden/  # golden parse output for -1-1-1.txt
 research/      # local clones of Dimbreath/GirlsFrontlineData + gfStory-en (not committed)
@@ -52,6 +57,26 @@ docker build -t gflvn-tools docker/
 python3 tools/fetch_bundles.py <bundleName> ...          # bundles -> assets/bundles/
 docker run --rm -v "$PWD:/work" -w /work gflvn-tools \
     python3 tools/extract_assets.py -1-1-1               # -> assets/img, assets/aud, assets/manifest.json
+```
+
+## Running
+
+Desktop (any machine with SDL2; headless smoke test works in docker):
+
+```sh
+# from repo root, after exporting the scene:
+cp assets/1-1-1.ir.json assets/scene.ir.json
+cmake -B build -S runtime && cmake --build build -j
+./build/gflvn assets            # click / Space / Enter to advance
+GFLVN_AUTO=1 ./build/gflvn ...  # auto-advance (smoke test)
+```
+
+PS Vita (cross-build in docker, no local toolchain):
+
+```sh
+docker build -t gflvn-build-vita -f docker/Dockerfile.vita docker/
+docker run --rm -v "$PWD:/src" gflvn-build-vita /src/tools/build_vita.sh
+# -> build/gflvn.vpk (title id GFLVN00001); install with VitaShell
 ```
 
 Parse any script to JSON:

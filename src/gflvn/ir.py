@@ -56,12 +56,11 @@ def to_ir(doc: dict, profiles: list[str]) -> dict:
 
         # --- state ops from effects ---
         if "bin" in fx:
-            events.append({
-                "t": "bg",
-                "id": f"bg_{fx['bin']}",
-                # black_on right before a bg switch means fade-in-from-black
-                "transition": "fade_black" if any(fx.get(k) is not None for k in ("黑屏2", "黑点2")) else None,
-            })
+            ev = {"t": "bg", "id": f"bg_{fx['bin']}"}
+            # black_on right before a bg switch means fade-in-from-black
+            if any(fx.get(k) is not None for k in ("黑屏2", "黑点2")):
+                ev["transition"] = "fade_black"
+            events.append(ev)
         if fx.get("bgm"):
             events.append({"t": "music", "id": f"bgm_{fx['bgm']}"})
         for key in _SE_KEYS:

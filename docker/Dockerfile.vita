@@ -1,0 +1,18 @@
+# VitaSDK cross-compile image for gfl-psvita.
+#
+# Build:  docker build -t gflvn-vita -f docker/Dockerfile.vita docker/
+# Build vpk (from repo root):
+#         docker run --rm -v "$PWD:/src" gflvn-build-vita /src/tools/build_vita.sh
+FROM vitasdk/vitasdk:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends cmake ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth=1 https://github.com/vitasdk/vdpm.git /tmp/vdpm \
+    && cd /tmp/vdpm \
+    && ./vdpm sdl2 \
+    && ./vdpm sdl2_image \
+    && ./vdpm sdl2_mixer \
+    && ./vdpm sdl2_ttf \
+    && rm -rf /tmp/vdpm
+
+WORKDIR /src

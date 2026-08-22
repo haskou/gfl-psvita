@@ -14,7 +14,7 @@ Design rationale and evidence base: [docs/investigation.md](docs/investigation.m
 | 01 | avgtxt parser -> typed beats (stdlib-only) | done |
 | 02 | asset resolver v0 (BIN/BGM/SE/sprites -> keys + warnings) | done |
 | 02b | Unity bundle extraction (needs archived `.ab` set) | pending data |
-| 03 | IR exporter: beats -> scene JSON + manifest | next |
+| 03 | IR exporter: beats -> flat event-stream scene JSON | done |
 | 04+ | C++/SDL2 desktop player, then Vita build | — |
 
 ## Layout
@@ -51,8 +51,3 @@ gflvn-parse research/GirlsFrontlineData/en-US/asset_textes/avgtxt/-1-1-1.txt
   used as reverse-engineering reference only).
 - Art/audio bundles exist only on the live game CDN and must be archived once
   (see investigation §7, "data acquisition / sunset").
-
-## License
-
-MIT — see [LICENSE](LICENSE). Game content belongs to MICA Team / Sunborn;
-this repo ships code and tooling, not game assets.

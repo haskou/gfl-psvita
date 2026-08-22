@@ -8,3 +8,7 @@ dist/
 
 # 476MB+ local clones of data sources (see README)
 research/
+
+# extracted game content + downloaded bundles (game assets are not distributed)
+assets/
+tmp/

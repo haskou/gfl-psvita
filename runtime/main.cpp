@@ -345,7 +345,12 @@ int Player::run() {
 }
 
 int main(int argc, char** argv) {
+#ifdef GFLVN_VITA
+    // Vita launches without argv; data lives in the vpk
+    std::string root = "app0:";
+#else
     std::string root = argc > 1 ? argv[1] : "assets";
+#endif
     Player p(root);
     return p.run();
 }

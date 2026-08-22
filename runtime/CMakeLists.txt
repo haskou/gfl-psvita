@@ -9,6 +9,7 @@ target_include_directories(gflvn PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(VITA)
   include("${VITASDK}/share/vita.cmake" REQUIRED)
+  target_compile_definitions(gflvn PRIVATE GFLVN_VITA)
   # vitasdk: ports install flat libs + headers under include/<lib>, no cmake configs
   target_include_directories(gflvn PRIVATE
       $ENV{VITASDK}/arm-vita-eabi/include/SDL2

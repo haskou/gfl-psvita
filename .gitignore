@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.DS_Store
+.pi/
+
+# 476MB+ local clones of data sources (see README)
+research/

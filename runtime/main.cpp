@@ -60,8 +60,9 @@ public:
 
     void setup();
     bool isAuto() const { return autoAdvance; }
+    std::string posLabel;       // "Chapter 1-2 · Part 1" shown in-game
     int run();                       // 0 scene finished, -1 quit, -2 back to menu
-    int pickScene(const std::vector<std::string>& names);
+    int pickScene(const std::vector<std::string>& names, const std::string& title = "");
 
 private:
     std::string root;
@@ -79,10 +80,12 @@ private:
     std::vector<Sprite> stage;
     bool nightOn = false;
     bool autoAdvance = false;   // GFLVN_AUTO env (CI smoke test)
+    bool shotDone = false;      // GFLVN_SHOT debug screenshot
     bool autoMode = false;      // Auto button / R trigger
     bool showLog = false;
     Uint8 flashAlpha = 0;       // white flash overlay
     Uint32 shakeUntil = 0;      // screen shake window
+    Uint32 autoPageAt = 0;      // when current text page was shown (auto timing)
     std::vector<std::pair<std::string, std::string>> history;  // name, line
     Uint8 blackAlpha = 0;   // persistent black overlay (black_on)
     Mix_Music* curMusic = nullptr;
@@ -229,7 +232,7 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         SDL_SetRenderDrawColor(ren, 255, 255, 255, flashAlpha);
         SDL_RenderFillRect(ren, nullptr);
     }
-    // textbox — gfStory-en style: dark box, orange left bar, white name tab above
+    // textbox — gfStory-en style: dark box growing upward, orange left bar, white name above
     if (sayEv && sayEv != (const json*)1) {
         const auto& ev = *sayEv;
         std::string name = ev.value("name", "");
@@ -237,37 +240,49 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         int page = std::min(sayPage, (int)pages.size() - 1);
         std::string text = pages[page].get<std::string>();
 
+        SDL_Color white{ 240, 240, 240, 255 };
+        int lineH = 0; TTF_SizeUTF8(font, "Ag", nullptr, &lineH);
+        const int boxW = 560;
+        auto lines = wrapText(text, boxW - 40);
+        int bh = 22 + (int)lines.size() * (lineH + 6);
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_Rect box{ 216, SCREEN_H - 172, 528, 108 };
+        SDL_Rect box{ (SCREEN_W - boxW) / 2, SCREEN_H - 44 - bh, boxW, bh };
         SDL_SetRenderDrawColor(ren, 10, 12, 16, 235);
         SDL_RenderFillRect(ren, &box);
         SDL_SetRenderDrawColor(ren, 230, 126, 34, 255);   // orange accent bar
         SDL_Rect bar{ box.x, box.y, 5, box.h };
         SDL_RenderFillRect(ren, &bar);
 
-        SDL_Color white{ 240, 240, 240, 255 };
-        int tx = box.x + 18;
+        int tx = box.x + 20;
         if (!name.empty()) {
             SDL_Surface* ns = TTF_RenderUTF8_Blended(nameFont, name.c_str(), white);
             SDL_Texture* nt = SDL_CreateTextureFromSurface(ren, ns);
-            SDL_Rect nr{ tx, box.y - ns->h - 6, ns->w, ns->h };
+            SDL_Rect nr{ tx, box.y - ns->h - 8, ns->w, ns->h };
             SDL_RenderCopy(ren, nt, nullptr, &nr);
             SDL_DestroyTexture(nt); SDL_FreeSurface(ns);
         }
-        int y = box.y + 14;
-        for (auto& ln : wrapText(text, box.w - 36)) {
+        int y = box.y + 12;
+        for (auto& ln : lines) {
             SDL_Surface* ts = TTF_RenderUTF8_Blended(font, ln.c_str(), white);
             SDL_Texture* tt2 = SDL_CreateTextureFromSurface(ren, ts);
             SDL_Rect tr{ tx, y, ts->w, ts->h };
             SDL_RenderCopy(ren, tt2, nullptr, &tr);
             SDL_DestroyTexture(tt2); SDL_FreeSurface(ts);
-            y += ts->h + 6;
+            y += lineH + 6;
         }
-        // advance indicator: small circle bottom-right
-        Uint8 ia = (Uint8)(160 + 80 * (SDL_GetTicks() % 800 < 400 ? 0 : 1));
+        // advance indicator: small square bottom-right
+        Uint8 ia = (Uint8)(140 + 90 * (SDL_GetTicks() % 800 < 400 ? 0 : 1));
         SDL_SetRenderDrawColor(ren, 200, 200, 200, ia);
-        SDL_Rect circ{ box.x + box.w - 22, box.y + box.h - 22, 8, 8 };
+        SDL_Rect circ{ box.x + box.w - 20, box.y + box.h - 16, 7, 7 };
         SDL_RenderFillRect(ren, &circ);
+    }
+    // current position, top-right
+    if (!posLabel.empty()) {
+        SDL_Surface* ts = TTF_RenderUTF8_Blended(uiFont, posLabel.c_str(), SDL_Color{ 185, 185, 185, 255 });
+        SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+        SDL_Rect r{ SCREEN_W - ts->w - 14, 18, ts->w, ts->h };
+        SDL_RenderCopy(ren, tt, nullptr, &r);
+        SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
     }
     drawToolbar();
     if (showLog) drawHistory();
@@ -460,10 +475,18 @@ int Player::run() {
 
         drawAll(sayPage, sayEv);
 
+        if (!shotDone && sayEv && SDL_getenv("GFLVN_SHOT")) {
+            shotDone = true;
+            SDL_Surface* shot = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_W, SCREEN_H, 32, SDL_PIXELFORMAT_RGBA32);
+            SDL_RenderReadPixels(ren, nullptr, SDL_PIXELFORMAT_RGBA32, shot->pixels, shot->pitch);
+            IMG_SavePNG(shot, SDL_getenv("GFLVN_SHOT"));
+            SDL_FreeSurface(shot);
+        }
+
         if (t == "say") {
             // wait for advance through all pages of this line
             bool lineDone = false;
-            Uint32 pageAt = SDL_GetTicks();
+            autoPageAt = SDL_GetTicks();
             while (!lineDone && running) {
                 SDL_Event e;
                 while (SDL_PollEvent(&e)) {
@@ -473,13 +496,13 @@ int Player::run() {
                         if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; rc = -2; }
                         else if (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
                                  e.key.keysym.sym == SDLK_x) adv = true;
-                        else if (e.key.keysym.sym == SDLK_a) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
+                        else if (e.key.keysym.sym == SDLK_a) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
                     }
 #ifdef GFLVN_VITA
                     else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                         if (e.cbutton.button == SDL_CONTROLLER_BUTTON_START) { running = false; rc = -2; }
                         else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) { showLog = !showLog; drawAll(sayPage, sayEv); }
-                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
 #endif
@@ -487,7 +510,7 @@ int Player::run() {
                         int hit = toolbarHit(e.button.x, e.button.y);
                         if (hit == 0 || hit == 1) { running = false; rc = -2; }  // Menu / Script -> chapter select
                         else if (hit == 2) { showLog = !showLog; drawAll(sayPage, sayEv); }
-                        else if (hit == 3) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
+                        else if (hit == 3) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
                     else if (e.type == SDL_FINGERDOWN) {
@@ -495,23 +518,23 @@ int Player::run() {
                         int hit = toolbarHit(fx, fy);
                         if (hit == 0 || hit == 1) { running = false; rc = -2; }
                         else if (hit == 2) { showLog = !showLog; drawAll(sayPage, sayEv); }
-                        else if (hit == 3) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
+                        else if (hit == 3) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
                     if (adv) {
                         if (showLog) showLog = false;   // any advance closes history first
                         else {
                             sayPage++;
-                            pageAt = SDL_GetTicks();
+                            autoPageAt = SDL_GetTicks();
                             if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
                         }
                         drawAll(sayPage, sayEv);
                     }
                 }
                 if (running && !lineDone && !showLog && (autoAdvance || autoMode) &&
-                    SDL_GetTicks() - pageAt > (autoAdvance ? 0 : 1500)) {
+                    SDL_GetTicks() - autoPageAt > (autoAdvance ? 0 : 2000)) {
                     sayPage++;
-                    pageAt = SDL_GetTicks();
+                    autoPageAt = SDL_GetTicks();
                     if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
                     drawAll(sayPage, sayEv);
                 }
@@ -530,18 +553,39 @@ int Player::run() {
     return rc;
 }
 
-int Player::pickScene(const std::vector<std::string>& names) {
+int Player::pickScene(const std::vector<std::string>& names, const std::string& title) {
     if (autoAdvance && !names.empty()) return 0;  // CI / smoke test
     int sel = 0;
+    const int rowH = 48, x0 = 150, w = 620, y0 = title.empty() ? 90 : 140;
     while (true) {
-        SDL_SetRenderDrawColor(ren, 12, 14, 24, 255);
+        SDL_SetRenderDrawColor(ren, 14, 16, 22, 255);
         SDL_RenderClear(ren);
-        SDL_Color white{235, 235, 235, 255}, yellow{240, 200, 80, 255};
-        for (size_t i = 0; i < names.size(); i++) {
-            std::string label = (i == (size_t)sel ? "> " : "  ") + names[i];
-            SDL_Surface* ts = TTF_RenderUTF8_Blended(font, label.c_str(), i == (size_t)sel ? yellow : white);
+        if (!title.empty()) {
+            SDL_Surface* ts = TTF_RenderUTF8_Blended(nameFont, title.c_str(), SDL_Color{ 240, 200, 80, 255 });
             SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
-            SDL_Rect r{60, 60 + (int)i * 38, ts->w, ts->h};
+            SDL_Rect r{ x0, 64, ts->w, ts->h };
+            SDL_RenderCopy(ren, tt, nullptr, &r);
+            SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
+            SDL_SetRenderDrawColor(ren, 230, 126, 34, 255);
+            SDL_Rect bar{ x0, 64 + r.h + 8, 46, 3 };
+            SDL_RenderFillRect(ren, &bar);
+        }
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        for (size_t i = 0; i < names.size(); i++) {
+            SDL_Rect row{ x0, y0 + (int)i * rowH, w, rowH - 10 };
+            bool selected = i == (size_t)sel;
+            if (selected) {
+                SDL_SetRenderDrawColor(ren, 38, 44, 58, 255);
+                SDL_RenderFillRect(ren, &row);
+                SDL_SetRenderDrawColor(ren, 230, 126, 34, 255);
+                SDL_Rect bar{ row.x, row.y, 4, row.h };
+                SDL_RenderFillRect(ren, &bar);
+            }
+            SDL_Color c{ (Uint8)(selected ? 245 : 195), (Uint8)(selected ? 245 : 195),
+                         (Uint8)(selected ? 245 : 205), 255 };
+            SDL_Surface* ts = TTF_RenderUTF8_Blended(font, names[i].c_str(), c);
+            SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+            SDL_Rect r{ row.x + 22, row.y + (row.h - ts->h) / 2, ts->w, ts->h };
             SDL_RenderCopy(ren, tt, nullptr, &r);
             SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
         }
@@ -566,7 +610,7 @@ int Player::pickScene(const std::vector<std::string>& names) {
             }
 #endif
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-                int idx = (e.button.y - 60) / 38;
+                int idx = (e.button.y - y0) / rowH;
                 if (idx >= 0 && idx < (int)names.size()) return idx;
             }
         }
@@ -590,6 +634,18 @@ static std::pair<std::string, std::string> splitSceneId(const std::string& id) {
     size_t p2 = id.find('-', p1 + 1);
     if (p2 == std::string::npos) return { id, "1" };  // 'X-Y' file: whole thing is the chapter
     return { id.substr(0, p2), id.substr(p2 + 1) };
+}
+
+// numeric dash-separated key so "1-10" sorts after "1-9"
+static std::vector<int> numPath(const std::string& id) {
+    std::vector<int> v;
+    int n = 0; bool in = false;
+    for (char c : id) {
+        if (isdigit((unsigned char)c)) { n = n * 10 + (c - '0'); in = true; }
+        else if (in) { v.push_back(n); n = 0; in = false; }
+    }
+    if (in) v.push_back(n);
+    return v;
 }
 
 int main(int argc, char** argv) {
@@ -626,7 +682,7 @@ int main(int argc, char** argv) {
         it->labels.push_back(plabel);
     }
     sort(chapters.begin(), chapters.end(), [](const Chap& a, const Chap& b) {
-        return partKey(a.label) < partKey(b.label);
+        return numPath(a.label) < numPath(b.label);
     });
     for (auto& c : chapters) {   // order parts within a chapter
         std::vector<size_t> idx(c.files.size());
@@ -656,10 +712,12 @@ int main(int argc, char** argv) {
     while (true) {
         std::vector<std::string> chLabels;
         for (const auto& c : chapters) chLabels.push_back("Chapter " + c.label);
-        int ch = chLabels.size() > 1 ? p.pickScene(chLabels) : 0;
+        int ch = chLabels.size() > 1 ? p.pickScene(chLabels, "Main Story") : 0;
         if (ch < 0) break;
-        int st = chapters[ch].files.size() > 1 ? p.pickScene(chapters[ch].labels) : 0;
+        int st = chapters[ch].files.size() > 1
+            ? p.pickScene(chapters[ch].labels, "Main Story \u00b7 Chapter " + chapters[ch].label) : 0;
         if (st < 0) continue;
+        p.posLabel = "Chapter " + chapters[ch].label + " \u00b7 " + chapters[ch].labels[st];
         p.loadScene(root + "/scenes/" + chapters[ch].files[st]);
         if (p.run() == -1) break;   // -2 = back to chapter menu, 0 = scene finished
     }

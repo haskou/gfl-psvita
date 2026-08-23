@@ -71,6 +71,16 @@ cmake -B build -S runtime && cmake --build build -j
 GFLVN_AUTO=1 ./build/gflvn ...  # auto-advance (smoke test)
 ```
 
+Controls (in-game toolbar mirrors gfStory-en: Menu / Script / Log / Auto):
+
+| Action | Desktop | Vita |
+|---|---|---|
+| advance text | click / Space / Enter / X | X button / tap |
+| back to chapter menu | Esc or Menu/Script button | START button |
+| history log | Log button | SELECT button |
+| auto-advance toggle | A key or Auto button | Y button or tap Auto |
+```
+
 PS Vita (cross-build in docker, no local toolchain):
 
 ```sh

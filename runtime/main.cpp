@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <sstream>
 #include <fstream>
@@ -59,7 +60,7 @@ public:
 
     void setup();
     bool isAuto() const { return autoAdvance; }
-    int run();
+    int run();                       // 0 scene finished, -1 quit, -2 back to menu
     int pickScene(const std::vector<std::string>& names);
 
 private:
@@ -72,11 +73,15 @@ private:
     SDL_Renderer* ren = nullptr;
     TTF_Font* font = nullptr;
     TTF_Font* nameFont = nullptr;
+    TTF_Font* uiFont = nullptr;
 
     std::map<std::string, Tex> texCache;
     std::vector<Sprite> stage;
     bool nightOn = false;
-    bool autoAdvance = false;
+    bool autoAdvance = false;   // GFLVN_AUTO env (CI smoke test)
+    bool autoMode = false;      // Auto button / R trigger
+    bool showLog = false;
+    std::vector<std::pair<std::string, std::string>> history;  // name, line
     Uint8 blackAlpha = 0;   // persistent black overlay (black_on)
     Mix_Music* curMusic = nullptr;
 
@@ -128,6 +133,10 @@ private:
     void layoutStage();
     void drawAll(int sayPage, const json* sayEv);
     void playMusic(const std::string& id);
+    std::vector<std::string> wrapText(const std::string& text, int maxW);
+    void drawToolbar();
+    void drawHistory();
+    int toolbarHit(int mx, int my);   // 0..3 button index, else -1
 };
 
 Tex* Player::getTex(const std::string& id) {
@@ -207,7 +216,7 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         SDL_SetRenderDrawColor(ren, 0, 0, 0, blackAlpha);
         SDL_RenderFillRect(ren, nullptr);
     }
-    // textbox
+    // textbox — gfStory-en style: dark box, orange left bar, white name tab above
     if (sayEv && sayEv != (const json*)1) {
         const auto& ev = *sayEv;
         std::string name = ev.value("name", "");
@@ -216,49 +225,139 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         std::string text = pages[page].get<std::string>();
 
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 8, 10, 14, 210);
-        SDL_Rect box{ 20, SCREEN_H - 150, SCREEN_W - 40, 130 };
+        SDL_Rect box{ 216, SCREEN_H - 172, 528, 108 };
+        SDL_SetRenderDrawColor(ren, 10, 12, 16, 235);
         SDL_RenderFillRect(ren, &box);
-        SDL_SetRenderDrawColor(ren, 200, 200, 200, 160);
-        SDL_RenderDrawRect(ren, &box);
+        SDL_SetRenderDrawColor(ren, 230, 126, 34, 255);   // orange accent bar
+        SDL_Rect bar{ box.x, box.y, 5, box.h };
+        SDL_RenderFillRect(ren, &bar);
 
-        SDL_Color white{ 235, 235, 235, 255 };
+        SDL_Color white{ 240, 240, 240, 255 };
+        int tx = box.x + 18;
         if (!name.empty()) {
-            SDL_Surface* ns = TTF_RenderUTF8_Blended(nameFont, name.c_str(), SDL_Color{ 120, 190, 255, 255 });
+            SDL_Surface* ns = TTF_RenderUTF8_Blended(nameFont, name.c_str(), white);
             SDL_Texture* nt = SDL_CreateTextureFromSurface(ren, ns);
-            SDL_Rect nr{ box.x + 16, box.y - 18, ns->w, ns->h };
+            SDL_Rect nr{ tx, box.y - ns->h - 6, ns->w, ns->h };
             SDL_RenderCopy(ren, nt, nullptr, &nr);
             SDL_DestroyTexture(nt); SDL_FreeSurface(ns);
         }
-        // word-wrap to box width
-        std::vector<std::string> lines;
-        int maxW = box.w - 32;
-        std::string cur;
-        std::istringstream iss(text);
-        std::string word;
-        while (iss >> word) {
-            std::string trial = cur.empty() ? word : cur + " " + word;
-            int tw = 0;
-            TTF_SizeUTF8(font, trial.c_str(), &tw, nullptr);
-            if (tw > maxW && !cur.empty()) { lines.push_back(cur); cur = word; }
-            else cur = trial;
-        }
-        lines.push_back(cur);
         int y = box.y + 14;
-        for (auto& ln : lines) {
+        for (auto& ln : wrapText(text, box.w - 36)) {
             SDL_Surface* ts = TTF_RenderUTF8_Blended(font, ln.c_str(), white);
             SDL_Texture* tt2 = SDL_CreateTextureFromSurface(ren, ts);
-            SDL_Rect tr{ box.x + 16, y, ts->w, ts->h };
+            SDL_Rect tr{ tx, y, ts->w, ts->h };
             SDL_RenderCopy(ren, tt2, nullptr, &tr);
             SDL_DestroyTexture(tt2); SDL_FreeSurface(ts);
             y += ts->h + 6;
         }
-        // advance indicator
-        SDL_SetRenderDrawColor(ren, 235, 235, 235, 255);
-        SDL_Rect tri{ box.x + box.w - 26, box.y + box.h - 18, 12, 6 };
-        SDL_RenderFillRect(ren, &tri);
+        // advance indicator: small circle bottom-right
+        Uint8 ia = (Uint8)(160 + 80 * (SDL_GetTicks() % 800 < 400 ? 0 : 1));
+        SDL_SetRenderDrawColor(ren, 200, 200, 200, ia);
+        SDL_Rect circ{ box.x + box.w - 22, box.y + box.h - 22, 8, 8 };
+        SDL_RenderFillRect(ren, &circ);
     }
+    drawToolbar();
+    if (showLog) drawHistory();
     SDL_RenderPresent(ren);
+}
+
+std::vector<std::string> Player::wrapText(const std::string& text, int maxW) {
+    std::vector<std::string> lines;
+    std::string cur;
+    std::istringstream iss(text);
+    std::string word;
+    while (iss >> word) {
+        std::string trial = cur.empty() ? word : cur + " " + word;
+        int tw = 0;
+        TTF_SizeUTF8(font, trial.c_str(), &tw, nullptr);
+        if (tw > maxW && !cur.empty()) { lines.push_back(cur); cur = word; }
+        else cur = trial;
+    }
+    lines.push_back(cur);
+    return lines;
+}
+
+// gfStory-en top-left button strip: Menu / Script / Log / Auto
+void Player::drawToolbar() {
+    static const SDL_Rect btns[4] = {
+        { 14, 14, 46, 46 }, { 68, 14, 46, 46 }, { 122, 14, 46, 46 }, { 176, 14, 46, 46 }
+    };
+    static const char* labels[4] = { "Menu", "Script", "Log", "Auto" };
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    for (int i = 0; i < 4; i++) {
+        const SDL_Rect& b = btns[i];
+        bool active = (i == 2 && showLog) || (i == 3 && autoMode);
+        SDL_SetRenderDrawColor(ren, 10, 12, 16, active ? 220 : 170);
+        SDL_RenderFillRect(ren, &b);
+        SDL_SetRenderDrawColor(ren, active ? 240 : 190, active ? 200 : 190, active ? 80 : 190, 150);
+        SDL_RenderDrawRect(ren, &b);
+        SDL_SetRenderDrawColor(ren, 235, 235, 235, 230);
+        float cx = b.x + b.w / 2.0f, cy = b.y + 17;
+        if (i == 0) {                      // hamburger
+            for (int k = -1; k <= 1; k++) {
+                SDL_Rect l{ (int)cx - 11, (int)cy + k * 6 - 1, 22, 2 };
+                SDL_RenderFillRect(ren, &l);
+            }
+        } else if (i == 1) {               // script page
+            SDL_Rect pg{ (int)cx - 9, (int)cy - 11, 18, 23 };
+            SDL_RenderDrawRect(ren, &pg);
+            for (int k = 0; k < 3; k++) {
+                SDL_Rect l{ (int)cx - 6, (int)cy - 7 + k * 6, 12, 2 };
+                SDL_RenderFillRect(ren, &l);
+            }
+        } else if (i == 2) {               // clock
+            for (int a = 0; a < 360; a += 20)
+                SDL_RenderDrawPoint(ren, (int)(cx + 10 * cos(a * M_PI / 180)), (int)(cy + 10 * sin(a * M_PI / 180)));
+            SDL_RenderDrawLine(ren, (int)cx, (int)cy, (int)cx, (int)cy - 6);
+            SDL_RenderDrawLine(ren, (int)cx, (int)cy, (int)cx + 5, (int)cy + 2);
+        } else {                           // play triangle
+            for (int dy = -7; dy <= 7; dy++) {
+                int w = 7 - abs(dy);
+                SDL_RenderDrawLine(ren, (int)cx - 4, (int)cy + dy, (int)cx - 4 + w, (int)cy + dy);
+            }
+        }
+        SDL_Surface* ts = TTF_RenderUTF8_Blended(uiFont, labels[i], SDL_Color{ 225, 225, 225, 255 });
+        SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+        SDL_Rect r{ b.x + (b.w - ts->w) / 2, b.y + b.h - 13, ts->w, ts->h };
+        SDL_RenderCopy(ren, tt, nullptr, &r);
+        SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
+    }
+}
+
+void Player::drawHistory() {
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 8, 10, 14, 235);
+    SDL_Rect full{ 0, 0, SCREEN_W, SCREEN_H };
+    SDL_RenderFillRect(ren, &full);
+    // last entries that fit on screen, newest at the bottom
+    int rowH = 30, y = SCREEN_H - 40, maxW = SCREEN_W - 120;
+    for (int i = (int)history.size() - 1; i >= 0 && y > 60; i--) {
+        auto& [name, text] = history[i];
+        auto lines = wrapText(text, maxW - 140);
+        for (int li = (int)lines.size() - 1; li >= 0 && y > 60; li--) {
+            std::string ln = (li == 0 && !name.empty() ? name + ":  " : std::string(8, ' ')) + lines[li];
+            SDL_Surface* ts = TTF_RenderUTF8_Blended(nameFont, ln.c_str(), SDL_Color{ 220, 220, 220, 255 });
+            SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+            SDL_Rect r{ 70, y - ts->h, ts->w, ts->h };
+            SDL_RenderCopy(ren, tt, nullptr, &r);
+            SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
+            y -= rowH;
+        }
+        y -= 8;
+    }
+    SDL_Surface* ts = TTF_RenderUTF8_Blended(nameFont, "History  (advance to close)", SDL_Color{ 240, 200, 80, 255 });
+    SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+    SDL_Rect r{ 70, 24, ts->w, ts->h };
+    SDL_RenderCopy(ren, tt, nullptr, &r);
+    SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
+}
+
+int Player::toolbarHit(int mx, int my) {
+    for (int i = 0; i < 4; i++) {
+        SDL_Rect b{ 14 + i * 54, 14, 46, 46 };
+        if (mx >= b.x && mx < b.x + b.w && my >= b.y && my < b.y + b.h) return i;
+    }
+    return -1;
 }
 
 void Player::setup() {
@@ -271,7 +370,8 @@ void Player::setup() {
     CHECK(TTF_Init() == 0, "ttf");
     font = TTF_OpenFont(fontPath.c_str(), 26);
     nameFont = TTF_OpenFont(fontPath.c_str(), 22);
-    CHECK(font && nameFont, "font load");
+    uiFont = TTF_OpenFont(fontPath.c_str(), 14);
+    CHECK(font && nameFont && uiFont, "font load");
 #ifdef GFLVN_VITA
     SDL_GameControllerOpen(0);   // vita buttons arrive as controller events
 #endif
@@ -285,6 +385,7 @@ int Player::run() {
     int sayPage = 0;
     const json* sayEv = nullptr;
     bool running = true;
+    int rc = 0;
 
     while (running && pc < events.size()) {
         const auto& ev = events[pc];
@@ -341,36 +442,71 @@ int Player::run() {
         if (t == "say") {
             // wait for advance through all pages of this line
             bool lineDone = false;
+            Uint32 pageAt = SDL_GetTicks();
             while (!lineDone && running) {
-                if (autoAdvance) break;  // CI / smoke test
                 SDL_Event e;
                 while (SDL_PollEvent(&e)) {
-                    if (e.type == SDL_QUIT) running = false;
-                    if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) running = false;
-#ifdef GFLVN_VITA
-                    bool adv = e.type == SDL_CONTROLLERBUTTONDOWN;
-#else
                     bool adv = false;
+                    if (e.type == SDL_QUIT) { running = false; rc = -1; }
+                    else if (e.type == SDL_KEYDOWN) {
+                        if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; rc = -2; }
+                        else if (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
+                                 e.key.keysym.sym == SDLK_x) adv = true;
+                        else if (e.key.keysym.sym == SDLK_a) autoMode = !autoMode;
+                    }
+#ifdef GFLVN_VITA
+                    else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                        if (e.cbutton.button == SDL_CONTROLLER_BUTTON_START) { running = false; rc = -2; }
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) showLog = !showLog;
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) autoMode = !autoMode;
+                        else adv = true;
+                    }
 #endif
-                    bool advKey = (e.type == SDL_KEYDOWN &&
-                                (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
-                                 e.key.keysym.sym == SDLK_x));
-                    bool advTouch = (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_FINGERDOWN);
-                    adv = adv || advKey || advTouch;
+                    else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                        int hit = toolbarHit(e.button.x, e.button.y);
+                        if (hit == 0 || hit == 1) { running = false; rc = -2; }  // Menu / Script -> chapter select
+                        else if (hit == 2) showLog = !showLog;
+                        else if (hit == 3) autoMode = !autoMode;
+                        else adv = true;
+                    }
+                    else if (e.type == SDL_FINGERDOWN) {
+                        int fx = (int)(e.tfinger.x * SCREEN_W), fy = (int)(e.tfinger.y * SCREEN_H);
+                        int hit = toolbarHit(fx, fy);
+                        if (hit == 0 || hit == 1) { running = false; rc = -2; }
+                        else if (hit == 2) showLog = !showLog;
+                        else if (hit == 3) autoMode = !autoMode;
+                        else adv = true;
+                    }
                     if (adv) {
-                        sayPage++;
-                        if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
+                        if (showLog) showLog = false;   // any advance closes history first
+                        else {
+                            sayPage++;
+                            pageAt = SDL_GetTicks();
+                            if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
+                        }
                         drawAll(sayPage, sayEv);
                     }
                 }
+                if (running && !lineDone && !showLog && (autoAdvance || autoMode) &&
+                    SDL_GetTicks() - pageAt > (autoAdvance ? 0 : 1500)) {
+                    sayPage++;
+                    pageAt = SDL_GetTicks();
+                    if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
+                    drawAll(sayPage, sayEv);
+                }
                 SDL_Delay(10);
             }
+            // record full line in backlog
+            std::string joined;
+            for (auto& pg : (*sayEv)["text"]) joined += pg.get<std::string>() + " ";
+            history.emplace_back((*sayEv).value("name", ""), joined);
+            if (history.size() > 200) history.erase(history.begin());
             sayEv = nullptr;
         }
         pc++;
     }
     std::cout << "scene finished\n";
-    return 0;
+    return rc;
 }
 
 int Player::pickScene(const std::vector<std::string>& names) {
@@ -504,7 +640,7 @@ int main(int argc, char** argv) {
         int st = chapters[ch].files.size() > 1 ? p.pickScene(chapters[ch].labels) : 0;
         if (st < 0) continue;
         p.loadScene(root + "/scenes/" + chapters[ch].files[st]);
-        p.run();  // returns to menu when scene ends
+        if (p.run() == -1) break;   // -2 = back to chapter menu, 0 = scene finished
     }
     return 0;
 }

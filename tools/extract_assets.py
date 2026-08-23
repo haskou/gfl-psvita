@@ -32,10 +32,10 @@ PREFAB_SOURCES = {
     "avgpicprefabs_npche": ["character_npc_helianthus"],
     "avgpicprefabs_npcky": ["character_npc_kryuger"],
 }
-# narrator name -> prefab name (identity/lowercase is tried first); investigation §7
+# narrator name (slugged, as it appears in scene events) -> prefab name
 NAME_OVERRIDES = {
-    "赫丽安": "npc-helian",
-    "克鲁格": "npc-kyruger",
+    slug("赫丽安"): "npc-helian",
+    slug("克鲁格"): "npc-kyruger",
 }
 
 
@@ -205,10 +205,43 @@ def audio_cues(wanted_bgm, wanted_se):
     return out
 
 
+def ensure_bundles(names):
+    """Download missing bundles by assetBundleName using the local resdata json."""
+    import urllib.request
+    rd_path = BUNDLES / "us_resdata.json"
+    if not names or not rd_path.exists():
+        return
+    rd = json.loads(rd_path.read_text())
+    by_name = {b["assetBundleName"]: b
+               for b in rd["BaseAssetBundles"] + rd["AddAssetBundles"]}
+    for n in sorted(set(names)):
+        dest = BUNDLES / f"{n}.ab"
+        if n in by_name and not dest.exists():
+            url = rd["resUrl"] + by_name[n]["resname"] + ".ab"
+            print(f"auto-download bundle: {n}")
+            urllib.request.urlretrieve(url, dest)
+
+
+def find_dat_entry(cue):
+    import urllib.request
+    rd = json.loads((BUNDLES / "us_resdata.json").read_text())
+    for b in rd["bytesData"]:
+        if b["fileName"].lower() == cue.lower():
+            dest = BUNDLES / (b["fileName"] + ".dat")
+            if not dest.exists():
+                print(f"auto-download audio bank: {b['fileName']}")
+                urllib.request.urlretrieve(rd["resUrl"] + b["resname"] + ".dat", dest)
+            return True
+    return False
+
+
 def main():
-    story_id = sys.argv[1] if len(sys.argv) > 1 else "-1-1-1"
-    doc = json.loads(Path(f"assets/{story_id}.beats.json").read_text())
-    manifest = {"id": story_id, "img": {}, "aud": {}, "warnings": []}
+    scenes_dir = Path("assets/scenes")
+    scene_ids = sys.argv[1:] or sorted(p.name.replace(".beats.json", "") for p in scenes_dir.glob("*.beats.json"))
+    docs = {}
+    for sid in scene_ids:
+        docs[sid] = json.loads((scenes_dir / f"{sid}.beats.json").read_text())
+    manifest = {"scenes": scene_ids, "img": {}, "aud": {}, "warnings": []}
 
     profiles = [
         ln.strip()
@@ -216,20 +249,25 @@ def main():
         if ln.strip()
     ]
 
-    # what does this scene need?
+    # what do these scenes need? (merged)
     bins, sprites, bgms, ses = [], [], [], []
-    for beat in doc["beats"]:
-        fx = beat["fx"]
-        if "bin" in fx and fx["bin"] not in bins:
-            bins.append(fx["bin"])
-        if fx.get("bgm") and fx["bgm"] not in bgms:
-            bgms.append(fx["bgm"])
-        for k in ("se", "se1", "se2", "se3"):
-            if fx.get(k) and fx[k] not in ses:
-                ses.append(fx[k])
-        for c in beat["cast"]:
-            if c["name"] and (c["name"].lower(), c["expr"] or 0) not in sprites:
-                sprites.append((c["name"].lower(), c["expr"] or 0))
+    for doc in docs.values():
+        for beat in doc["beats"]:
+            fx = beat["fx"]
+            if "bin" in fx and fx["bin"] not in bins:
+                bins.append(fx["bin"])
+            if fx.get("bgm") and fx["bgm"] not in bgms:
+                bgms.append(fx["bgm"])
+            for k in ("se", "se1", "se2", "se3"):
+                if fx.get(k) and fx[k] not in ses:
+                    ses.append(fx[k])
+            for c in beat["cast"]:
+                if c["name"] and (slug(c["name"]), c["expr"] or 0) not in sprites:
+                    sprites.append((slug(c["name"]), c["expr"] or 0))
+
+    # make sure every dependency of our prefab bundles is present before extraction
+    have_prefabs = [p.stem for p in BUNDLES.glob("avgpicprefabs_*.ab")]
+    ensure_bundles(prefab_dependencies(have_prefabs))
 
     manifest["img"].update(extract_bgs(profiles, bins))
     manifest["img"].update(extract_sprites(sprites))
@@ -252,11 +290,21 @@ def main():
                         tmpl[f[1]] = f[2]
 
     cues = audio_cues(bgms, ses)
-    for name in bgms + ses:
+
+    def resolve_audio(name):
         cue = tmpl.get(name, name).lower()
-        path = cues.get(cue)
+        if cue in cues:
+            return ("bgm_" if name in bgms else "se_") + name, cues[cue]
+        # try to fetch a bank named <cue>.acb and re-extract
+        if find_dat_entry(cue + ".acb"):
+            fresh = audio_cues(bgms, ses)
+            cues.update(fresh)
+            if cue in cues:
+                return ("bgm_" if name in bgms else "se_") + name, cues[cue]
+        return None, None
+    for name in bgms + ses:
+        key, path = resolve_audio(name)
         if path:
-            key = ("bgm_" if name in bgms else "se_") + name
             manifest["aud"][key] = path
         else:
             manifest["warnings"].append(f"audio '{name}' (cue '{tmpl.get(name, name)}') unresolved")

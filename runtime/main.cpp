@@ -45,12 +45,22 @@ struct Sprite {
 class Player {
 public:
     Player(const std::string& rootDir) : root(rootDir) {
-        manifest = loadJson(root + "/manifest.json");
-        scene = loadJson(root + "/scene.ir.json");
+        manifest = loadJson(manifestPath());
         fontPath = findFont();
     }
 
+    bool loadScene(const std::string& path) {
+        scene = loadJson(path);
+        // reset per-scene state
+        stage.clear(); nightOn = false; blackAlpha = 0; bgId.clear();
+        texCache.clear();
+        return true;
+    }
+
+    void setup();
+    bool isAuto() const { return autoAdvance; }
     int run();
+    int pickScene(const std::vector<std::string>& names);
 
 private:
     std::string root;
@@ -66,6 +76,7 @@ private:
     std::map<std::string, Tex> texCache;
     std::vector<Sprite> stage;
     bool nightOn = false;
+    bool autoAdvance = false;
     Uint8 blackAlpha = 0;   // persistent black overlay (black_on)
     Mix_Music* curMusic = nullptr;
 
@@ -85,6 +96,14 @@ private:
         for (const auto& p : candidates)
             if (fs::exists(p)) return p;
         return "NotoSans-Regular.ttf";
+    }
+
+    std::string manifestPath() {
+        const std::string cands[] = { root + "/manifest.json", "assets/manifest.json",
+                                      "manifest.json", "app0:/manifest.json" };
+        for (const auto& c : cands)
+            if (fs::exists(c)) return c;
+        return root + "/manifest.json";
     }
 
     std::string assetPath(const std::string& id) {
@@ -242,8 +261,8 @@ void Player::drawAll(int sayPage, const json* sayEv) {
     SDL_RenderPresent(ren);
 }
 
-int Player::run() {
-    CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) == 0, "SDL_Init");
+void Player::setup() {
+    CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) == 0, "SDL_Init");
     CHECK((win = SDL_CreateWindow("gflvn", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                   SCREEN_W, SCREEN_H, 0)) != nullptr, "window");
     CHECK((ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC)) != nullptr ||
@@ -253,15 +272,16 @@ int Player::run() {
     font = TTF_OpenFont(fontPath.c_str(), 26);
     nameFont = TTF_OpenFont(fontPath.c_str(), 22);
     CHECK(font && nameFont, "font load");
+    autoAdvance = SDL_getenv("GFLVN_AUTO") != nullptr;
+}
 
-    drawAll(0, nullptr);  // clear screen before first event
+int Player::run() {
 
     const auto& events = scene["events"];
     size_t pc = 0;
     int sayPage = 0;
     const json* sayEv = nullptr;
     bool running = true;
-    bool autoAdvance = SDL_getenv("GFLVN_AUTO") != nullptr;
 
     while (running && pc < events.size()) {
         const auto& ev = events[pc];
@@ -324,10 +344,16 @@ int Player::run() {
                 while (SDL_PollEvent(&e)) {
                     if (e.type == SDL_QUIT) running = false;
                     if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) running = false;
-                    bool adv = (e.type == SDL_KEYDOWN &&
+#ifdef GFLVN_VITA
+                    bool adv = e.type == SDL_CONTROLLERBUTTONDOWN;
+#else
+                    bool adv = false;
+#endif
+                    bool advKey = (e.type == SDL_KEYDOWN &&
                                 (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
-                                 e.key.keysym.sym == SDLK_x))
-                               || (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_FINGERDOWN);
+                                 e.key.keysym.sym == SDLK_x));
+                    bool advTouch = (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_FINGERDOWN);
+                    adv = adv || advKey || advTouch;
                     if (adv) {
                         sayPage++;
                         if (sayPage >= (int)(*sayEv)["text"].size()) lineDone = true;
@@ -344,6 +370,49 @@ int Player::run() {
     return 0;
 }
 
+int Player::pickScene(const std::vector<std::string>& names) {
+    if (autoAdvance && !names.empty()) return 0;  // CI / smoke test
+    int sel = 0;
+    while (true) {
+        SDL_SetRenderDrawColor(ren, 12, 14, 24, 255);
+        SDL_RenderClear(ren);
+        SDL_Color white{235, 235, 235, 255}, yellow{240, 200, 80, 255};
+        for (size_t i = 0; i < names.size(); i++) {
+            std::string label = (i == (size_t)sel ? "> " : "  ") + names[i];
+            SDL_Surface* ts = TTF_RenderUTF8_Blended(font, label.c_str(), i == (size_t)sel ? yellow : white);
+            SDL_Texture* tt = SDL_CreateTextureFromSurface(ren, ts);
+            SDL_Rect r{60, 60 + (int)i * 38, ts->w, ts->h};
+            SDL_RenderCopy(ren, tt, nullptr, &r);
+            SDL_DestroyTexture(tt); SDL_FreeSurface(ts);
+        }
+        SDL_RenderPresent(ren);
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT) return -1;
+            if (e.type == SDL_KEYDOWN) {
+                if (e.key.keysym.sym == SDLK_UP) sel = (sel + names.size() - 1) % names.size();
+                if (e.key.keysym.sym == SDLK_DOWN) sel = (sel + 1) % names.size();
+                if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_x) && !names.empty()) return sel;
+#ifdef GFLVN_VITA
+                if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+                        sel = (sel + names.size() - 1) % names.size();
+                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+                        sel = (sel + 1) % names.size();
+                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A && !names.empty()) return sel;
+                }
+#endif
+                if (e.key.keysym.sym == SDLK_ESCAPE) return -1;
+            }
+            if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+                int idx = (e.button.y - 40) / 38;
+                if (idx >= 0 && idx < (int)names.size()) return idx;
+            }
+        }
+        SDL_Delay(10);
+    }
+}
+
 int main(int argc, char** argv) {
 #ifdef GFLVN_VITA
     // Vita launches without argv; data lives in the vpk
@@ -352,5 +421,31 @@ int main(int argc, char** argv) {
     std::string root = argc > 1 ? argv[1] : "assets";
 #endif
     Player p(root);
-    return p.run();
+
+    // discover scenes: scenes/*.ir.json, fallback to single scene.ir.json
+    std::vector<std::string> scenes;
+    std::error_code ec;
+    for (auto& f : fs::directory_iterator(root + "/scenes", ec))
+        if (!ec && f.path().extension() == ".json" && f.path().string().find(".ir.") != std::string::npos)
+            scenes.push_back(f.path().filename().string());
+    sort(scenes.begin(), scenes.end());
+
+    if (scenes.empty() && fs::exists(root + "/scene.ir.json")) scenes.push_back("scene.ir.json");
+    if (scenes.empty()) { std::cerr << "no scenes found\n"; return 1; }
+
+    p.setup();
+    if (p.isAuto()) {  // smoke test: play every scene once, no menu
+        for (const auto& sn : scenes) {
+            p.loadScene(root + "/scenes/" + sn);
+            p.run();
+        }
+        return 0;
+    }
+    while (true) {
+        int sel = scenes.size() > 1 ? p.pickScene(scenes) : 0;
+        if (sel < 0) break;
+        p.loadScene(root + "/scenes/" + scenes[sel]);
+        p.run();  // returns to menu when scene ends
+    }
+    return 0;
 }

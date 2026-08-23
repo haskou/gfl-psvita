@@ -6,9 +6,10 @@ cd /src
 
 STAGE=/tmp/vpkdata
 rm -rf "$STAGE"
-mkdir -p "$STAGE/img" "$STAGE/aud" "$STAGE/fonts"
+mkdir -p "$STAGE/img" "$STAGE/aud" "$STAGE/fonts" "$STAGE/scenes"
 
-cp assets/manifest.json assets/scene.ir.json "$STAGE/"
+cp assets/manifest.json "$STAGE/"
+cp assets/scenes/*.ir.json "$STAGE/scenes/"
 cp assets/img/*.png "$STAGE/img/"
 # only the audio referenced by this scene's manifest
 grep -o '"assets/aud/[^"]*"' assets/manifest.json | tr -d '"' | while read -r f; do
@@ -23,7 +24,7 @@ make -C /build -j"$(nproc)"
 vita-mksfoex -s TITLE_ID=GFLVN00001 -s APP_VER="00.10" "GFL VN" /build/param.sfo
 vita-pack-vpk -s /build/param.sfo -b /build/gflvn.self /build/gflvn.vpk \
     -a "$STAGE/manifest.json=manifest.json" \
-    -a "$STAGE/scene.ir.json=scene.ir.json" \
+    -a "$STAGE/scenes=scenes" \
     -a "$STAGE/img=img" \
     -a "$STAGE/aud=aud" \
     -a "$STAGE/fonts=fonts" \

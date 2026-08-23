@@ -10,10 +10,10 @@ from .assets import resolve_scene
 
 
 def slug(name: str) -> str:
-    """ASCII-safe asset key component: lowercase alnum kept, rest hex-escaped."""
+    """ASCII-safe asset key component: lowercase alnum plus -_ kept, rest hex-escaped."""
     out = []
     for ch in name.lower():
-        if ch.isascii() and (ch.isalnum() or ch == "_"):
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
             out.append(ch)
         else:
             out.append("u" + ch.encode("utf-8").hex())

@@ -81,6 +81,8 @@ private:
     bool autoAdvance = false;   // GFLVN_AUTO env (CI smoke test)
     bool autoMode = false;      // Auto button / R trigger
     bool showLog = false;
+    Uint8 flashAlpha = 0;       // white flash overlay
+    Uint32 shakeUntil = 0;      // screen shake window
     std::vector<std::pair<std::string, std::string>> history;  // name, line
     Uint8 blackAlpha = 0;   // persistent black overlay (black_on)
     Mix_Music* curMusic = nullptr;
@@ -181,6 +183,11 @@ void Player::playMusic(const std::string& id) {
 }
 
 void Player::drawAll(int sayPage, const json* sayEv) {
+    // screen shake offset
+    int ox = 0, oy = 0;
+    if (shakeUntil > SDL_GetTicks()) {
+        ox = rand() % 13 - 6; oy = rand() % 9 - 5;
+    }
     // background
     SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
     SDL_RenderClear(ren);
@@ -189,7 +196,7 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         if (bg->tex) {
             double s = std::max((double)SCREEN_W / bg->w, (double)SCREEN_H / bg->h);
             int w = (int)(bg->w * s), h = (int)(bg->h * s);
-            SDL_Rect r{ (SCREEN_W - w) / 2, (SCREEN_H - h) / 2, w, h };
+            SDL_Rect r{ (SCREEN_W - w) / 2 + ox, (SCREEN_H - h) / 2 + oy, w, h };
             SDL_RenderCopy(ren, bg->tex, nullptr, &r);
         }
     }
@@ -207,13 +214,19 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         SDL_QueryTexture(t->tex, nullptr, nullptr, &r.w, &r.h);
         float scale = (SCREEN_H * 0.92f) / r.h;
         r.w = (int)(r.w * scale); r.h = (int)(r.h * scale);
-        r.x = (int)sp.x; r.y = SCREEN_H - r.h - 40;
+        r.x = (int)sp.x + ox; r.y = SCREEN_H - r.h - 40 + oy;
         SDL_RenderCopy(ren, t->tex, nullptr, &r);
     }
     // persistent black
     if (blackAlpha > 0) {
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(ren, 0, 0, 0, blackAlpha);
+        SDL_RenderFillRect(ren, nullptr);
+    }
+    // white flash
+    if (flashAlpha > 0) {
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, flashAlpha);
         SDL_RenderFillRect(ren, nullptr);
     }
     // textbox — gfStory-en style: dark box, orange left bar, white name tab above
@@ -394,9 +407,10 @@ int Player::run() {
         if (t == "end") break;
 
         if (t == "bg") {
+            std::string prev = bgId;
             bgId = ev["id"];
-            if (ev.value("transition", "") == "fade_black") {
-                // quick fade-in-from-black approximation
+            if (bgId != prev) {
+                // quick fade-in-from-black on every background change
                 blackAlpha = 255;
                 drawAll(sayPage, sayEv);
                 for (int a = 255; a >= 0; a -= 24) { blackAlpha = a; drawAll(sayPage, sayEv); SDL_Delay(16); }
@@ -429,8 +443,15 @@ int Player::run() {
             else if (k == "fade_from_black") {
                 for (int a = 255; a >= 0; a -= 16) { blackAlpha = a; drawAll(sayPage, sayEv); SDL_Delay(16); }
                 blackAlpha = 0;
+            } else if (k == "shake") {
+                shakeUntil = SDL_GetTicks() + 600;
+                while (SDL_GetTicks() < shakeUntil) { drawAll(sayPage, sayEv); SDL_Delay(16); }
+                shakeUntil = 0;
+            } else if (k == "flash") {
+                for (int a = 220; a >= 0; a -= 20) { flashAlpha = (Uint8)a; drawAll(sayPage, sayEv); SDL_Delay(16); }
+                flashAlpha = 0;
             }
-            // shake/flash/eyes_open/memory masks: logged no-op for now
+            // eyes_open/memory masks: logged no-op for now
         } else if (t == "say") {
             sayEv = &ev; sayPage = 0;
         } else if (t == "choice") {
@@ -452,29 +473,29 @@ int Player::run() {
                         if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; rc = -2; }
                         else if (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
                                  e.key.keysym.sym == SDLK_x) adv = true;
-                        else if (e.key.keysym.sym == SDLK_a) autoMode = !autoMode;
+                        else if (e.key.keysym.sym == SDLK_a) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
                     }
 #ifdef GFLVN_VITA
                     else if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                         if (e.cbutton.button == SDL_CONTROLLER_BUTTON_START) { running = false; rc = -2; }
-                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) showLog = !showLog;
-                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) autoMode = !autoMode;
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) { showLog = !showLog; drawAll(sayPage, sayEv); }
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
 #endif
                     else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
                         int hit = toolbarHit(e.button.x, e.button.y);
                         if (hit == 0 || hit == 1) { running = false; rc = -2; }  // Menu / Script -> chapter select
-                        else if (hit == 2) showLog = !showLog;
-                        else if (hit == 3) autoMode = !autoMode;
+                        else if (hit == 2) { showLog = !showLog; drawAll(sayPage, sayEv); }
+                        else if (hit == 3) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
                     else if (e.type == SDL_FINGERDOWN) {
                         int fx = (int)(e.tfinger.x * SCREEN_W), fy = (int)(e.tfinger.y * SCREEN_H);
                         int hit = toolbarHit(fx, fy);
                         if (hit == 0 || hit == 1) { running = false; rc = -2; }
-                        else if (hit == 2) showLog = !showLog;
-                        else if (hit == 3) autoMode = !autoMode;
+                        else if (hit == 2) { showLog = !showLog; drawAll(sayPage, sayEv); }
+                        else if (hit == 3) { autoMode = !autoMode; drawAll(sayPage, sayEv); }
                         else adv = true;
                     }
                     if (adv) {

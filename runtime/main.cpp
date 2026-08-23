@@ -272,6 +272,9 @@ void Player::setup() {
     font = TTF_OpenFont(fontPath.c_str(), 26);
     nameFont = TTF_OpenFont(fontPath.c_str(), 22);
     CHECK(font && nameFont, "font load");
+#ifdef GFLVN_VITA
+    SDL_GameControllerOpen(0);   // vita buttons arrive as controller events
+#endif
     autoAdvance = SDL_getenv("GFLVN_AUTO") != nullptr;
 }
 
@@ -393,24 +396,43 @@ int Player::pickScene(const std::vector<std::string>& names) {
                 if (e.key.keysym.sym == SDLK_UP) sel = (sel + names.size() - 1) % names.size();
                 if (e.key.keysym.sym == SDLK_DOWN) sel = (sel + 1) % names.size();
                 if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_x) && !names.empty()) return sel;
-#ifdef GFLVN_VITA
-                if (e.type == SDL_CONTROLLERBUTTONDOWN) {
-                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
-                        sel = (sel + names.size() - 1) % names.size();
-                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
-                        sel = (sel + 1) % names.size();
-                    if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A && !names.empty()) return sel;
-                }
-#endif
                 if (e.key.keysym.sym == SDLK_ESCAPE) return -1;
             }
+#ifdef GFLVN_VITA
+            if (e.type == SDL_CONTROLLERBUTTONDOWN) {
+                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP)
+                    sel = (sel + names.size() - 1) % names.size();
+                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)
+                    sel = (sel + 1) % names.size();
+                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A && !names.empty()) return sel;
+                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_B) return -1;
+            }
+#endif
             if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-                int idx = (e.button.y - 40) / 38;
+                int idx = (e.button.y - 60) / 38;
                 if (idx >= 0 && idx < (int)names.size()) return idx;
             }
         }
         SDL_Delay(10);
     }
+}
+
+// '2first' -> (2, 0)  '2end' -> (2, 2)  '1' -> (1, 1): reading order first < plain < end
+static std::pair<int, int> partKey(const std::string& part) {
+    int n = 0; size_t i = 0;
+    while (i < part.size() && isdigit((unsigned char)part[i])) n = n * 10 + (part[i++] - '0');
+    std::string tail = part.substr(i);
+    int r = tail.empty() ? 1 : (tail.find("first") != std::string::npos ? 0 : 2);
+    return { n, r };
+}
+
+// '1-2-2first' -> {chapter "1-2", part "2first"}; 'scene' -> {"0", "scene"}
+static std::pair<std::string, std::string> splitSceneId(const std::string& id) {
+    size_t p1 = id.find('-');
+    if (p1 == std::string::npos) return { "0", id };
+    size_t p2 = id.find('-', p1 + 1);
+    if (p2 == std::string::npos) return { id, "1" };  // 'X-Y' file: whole thing is the chapter
+    return { id.substr(0, p2), id.substr(p2 + 1) };
 }
 
 int main(int argc, char** argv) {
@@ -422,29 +444,66 @@ int main(int argc, char** argv) {
 #endif
     Player p(root);
 
-    // discover scenes: scenes/*.ir.json, fallback to single scene.ir.json
-    std::vector<std::string> scenes;
+    // discover scenes: scenes/*.ir.json grouped into chapters, gfStory-en style:
+    //   Chapter X-Y -> Part N (first/second). Fallback: single scene.ir.json.
+    struct Chap { std::string label; std::vector<std::string> files; std::vector<std::string> labels; };
+    std::vector<Chap> chapters;
     std::error_code ec;
-    for (auto& f : fs::directory_iterator(root + "/scenes", ec))
-        if (!ec && f.path().extension() == ".json" && f.path().string().find(".ir.") != std::string::npos)
-            scenes.push_back(f.path().filename().string());
-    sort(scenes.begin(), scenes.end());
+    for (auto& f : fs::directory_iterator(root + "/scenes", ec)) {
+        if (ec || f.path().extension() != ".json") continue;
+        std::string fn = f.path().filename().string();
+        if (fn.find(".ir.") == std::string::npos) continue;
+        std::string id = f.path().stem().string();          // e.g. 1-2-2first
+        auto [chId, part] = splitSceneId(id);
+        auto [pn, pr] = partKey(part);
+        std::string plabel = "Part " + std::to_string(pn);
+        if (pr == 0) plabel += " (first)";
+        if (pr == 2) plabel += " (second)";
+        auto it = std::find_if(chapters.begin(), chapters.end(),
+                               [&](const Chap& c) { return c.label == chId; });
+        if (it == chapters.end()) {
+            chapters.push_back({ chId, {}, {} });
+            it = chapters.end() - 1;
+        }
+        it->files.push_back(fn);
+        it->labels.push_back(plabel);
+    }
+    sort(chapters.begin(), chapters.end(), [](const Chap& a, const Chap& b) {
+        return partKey(a.label) < partKey(b.label);
+    });
+    for (auto& c : chapters) {   // order parts within a chapter
+        std::vector<size_t> idx(c.files.size());
+        for (size_t i = 0; i < idx.size(); i++) idx[i] = i;
+        sort(idx.begin(), idx.end(), [&](size_t a, size_t b) {
+            return partKey(splitSceneId(c.files[a]).second) < partKey(splitSceneId(c.files[b]).second);
+        });
+        std::vector<std::string> files, labels;
+        for (size_t i : idx) { files.push_back(c.files[i]); labels.push_back(c.labels[i]); }
+        c.files = files; c.labels = labels;
+    }
 
-    if (scenes.empty() && fs::exists(root + "/scene.ir.json")) scenes.push_back("scene.ir.json");
-    if (scenes.empty()) { std::cerr << "no scenes found\n"; return 1; }
+    if (chapters.empty()) {
+        if (!fs::exists(root + "/scene.ir.json")) { std::cerr << "no scenes found\n"; return 1; }
+        chapters.push_back({ "scene", { "scene.ir.json" }, { "scene" } });
+    }
 
     p.setup();
     if (p.isAuto()) {  // smoke test: play every scene once, no menu
-        for (const auto& sn : scenes) {
-            p.loadScene(root + "/scenes/" + sn);
-            p.run();
-        }
+        for (const auto& c : chapters)
+            for (const auto& fn : c.files) {
+                p.loadScene(root + "/scenes/" + fn);
+                p.run();
+            }
         return 0;
     }
     while (true) {
-        int sel = scenes.size() > 1 ? p.pickScene(scenes) : 0;
-        if (sel < 0) break;
-        p.loadScene(root + "/scenes/" + scenes[sel]);
+        std::vector<std::string> chLabels;
+        for (const auto& c : chapters) chLabels.push_back("Chapter " + c.label);
+        int ch = chLabels.size() > 1 ? p.pickScene(chLabels) : 0;
+        if (ch < 0) break;
+        int st = chapters[ch].files.size() > 1 ? p.pickScene(chapters[ch].labels) : 0;
+        if (st < 0) continue;
+        p.loadScene(root + "/scenes/" + chapters[ch].files[st]);
         p.run();  // returns to menu when scene ends
     }
     return 0;

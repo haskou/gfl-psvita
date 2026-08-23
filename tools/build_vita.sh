@@ -31,3 +31,5 @@ vita-pack-vpk -s /build/param.sfo -b /build/gflvn.self /build/gflvn.vpk \
     -a "/src/runtime/sce_sys=sce_sys"
 
 echo "vpk: /build/gflvn.vpk"
+mkdir -p /src/build
+cp /build/gflvn.vpk /src/build/

@@ -136,8 +136,9 @@ Set `GFLVN_AUTO=1` for an automated smoke run.
 | Action | Desktop | PS Vita |
 |---|---|---|
 | Advance / confirm | click, Space, Enter, or X | Cross or tap |
-| Back | Escape | Circle |
-| Open history | L | Select |
+| Hide / show story UI | — | Circle |
+| Back to menu | Escape | Start during a story; Circle in menus |
+| Open history | L | Square or Select |
 | Toggle auto mode | A | Triangle |
 | Mark chapter read/unread | Z | Square |
 | Navigate | arrow keys | D-pad |

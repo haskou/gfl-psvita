@@ -39,6 +39,20 @@ def test_failed_or_closed_vita_keyboard_cannot_trap_menu_focus():
     assert "sceImeDialogAbort();" in SOURCE
 
 
+def test_story_circle_toggles_clean_view_and_square_opens_history():
+    assert "storyUiHidden = !storyUiHidden;" in SOURCE
+    assert "if (!storyUiHidden && sayEv" in SOURCE
+    assert "if (!storyUiHidden && !showLog && !showScript) drawToolbar();" in SOURCE
+    assert "e.cbutton.button == SDL_CONTROLLER_BUTTON_X ||" in SOURCE
+
+
+def test_story_text_is_two_pixels_larger_without_growing_menu_text():
+    assert "TTF_OpenFont(fontPath.c_str(), 20)" in SOURCE
+    assert "TTF_OpenFont(fontPath.c_str(), 21)" in SOURCE
+    assert "TTF_OpenFont(fontPath.c_str(), 12)" in SOURCE
+    assert "std::round(20.0 * value / 50.0)" in SOURCE
+
+
 if __name__ == "__main__":
     from tests.support import run_module_tests
     run_module_tests(globals())

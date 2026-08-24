@@ -146,7 +146,7 @@ public:
         snowOn = false; sparksOn = false; flamesOn = false; eyeMaskHeight = 0;
         for (auto& [_, tex] : texCache) if (tex.tex) SDL_DestroyTexture(tex.tex);
         texCache.clear();
-        history.clear(); showLog = false; showScript = false;
+        history.clear(); showLog = false; showScript = false; storyUiHidden = false;
         historyScroll = scriptScroll = 0; choiceEv = nullptr;
         callSessionActive = false; callNonRemoteLines = 0; callTransitionAt = 0;
         return true;
@@ -201,6 +201,7 @@ private:
     int autoSpeed = 1;          // gfStory-en slider: 1x..10x
     bool showLog = false;
     bool showScript = false;
+    bool storyUiHidden = false; // Circle toggles a clean view of the artwork.
     int historyScroll = 0;
     int scriptScroll = 0;
     Uint8 flashAlpha = 0;       // white flash overlay
@@ -751,7 +752,7 @@ void Player::drawAll(int sayPage, const json* sayEv) {
     }
     // Fixed gfStory-en dialog: 42em wide, 2em from bottom, 24px name rail,
     // 5em text viewport. Typewriter timing is handled by the event loop.
-    if (sayEv && sayEv != (const json*)1) {
+    if (!storyUiHidden && sayEv && sayEv != (const json*)1) {
         const auto& ev = *sayEv;
         std::string name = ev.value("name", "");
         const auto& pages = ev["text"];
@@ -760,7 +761,7 @@ void Player::drawAll(int sayPage, const json* sayEv) {
         drawDialog(name, text, visibleChars, textAnimating);
     }
     if (choiceEv) drawChoices();
-    if (!showLog && !showScript) drawToolbar();
+    if (!storyUiHidden && !showLog && !showScript) drawToolbar();
     if (showLog) drawHistory();
     if (showScript) drawScript();
     SDL_RenderPresent(ren);
@@ -869,7 +870,7 @@ TTF_Font* Player::markupFont(const std::string& text) {
     if (end == std::string::npos) return font;
     int value = 50;
     try { value = std::stoi(text.substr(p + 6, end - p - 6)); } catch (...) { return font; }
-    int px = std::clamp((int)std::round(18.0 * value / 50.0), 9, 36);
+    int px = std::clamp((int)std::round(20.0 * value / 50.0), 10, 40);
     int cacheKey = cjk ? 1000 + px : px;
     auto it = scaledFonts.find(cacheKey);
     if (it != scaledFonts.end()) return it->second;
@@ -1241,11 +1242,11 @@ void Player::setup() {
     audioReady = Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096) == 0;
     if (!audioReady) std::cerr << "WARN: audio disabled: " << Mix_GetError() << "\n";
     CHECK(TTF_Init() == 0, "ttf");
-    font = TTF_OpenFont(fontPath.c_str(), 18);      // CSS 1.1em at 16px
-    nameFont = TTF_OpenFont(fontPath.c_str(), 19); // narrator span 1.2em
+    font = TTF_OpenFont(fontPath.c_str(), 20);
+    nameFont = TTF_OpenFont(fontPath.c_str(), 21);
     uiFont = TTF_OpenFont(fontPath.c_str(), 12);
-    cjkFont = TTF_OpenFont(cjkFontPath.c_str(), 18);
-    cjkNameFont = TTF_OpenFont(cjkFontPath.c_str(), 19);
+    cjkFont = TTF_OpenFont(cjkFontPath.c_str(), 20);
+    cjkNameFont = TTF_OpenFont(cjkFontPath.c_str(), 21);
     cjkUiFont = TTF_OpenFont(cjkFontPath.c_str(), 12);
     CHECK(font && nameFont && uiFont && cjkFont && cjkNameFont && cjkUiFont, "font load");
 #ifdef GFLVN_VITA
@@ -1380,6 +1381,7 @@ int Player::run() {
             sayEv = &ev; sayPage = 0; visibleChars = 0; textAnimating = true;
         } else if (t == "choice") {
             if (ev.contains("stage")) syncStage(ev["stage"]);
+            storyUiHidden = false;
             choiceEv = &ev;
             choiceIndex = 0;
         }
@@ -1477,6 +1479,9 @@ int Player::run() {
                         if (e.key.keysym.sym == SDLK_ESCAPE) { running = false; rc = -2; }
                         else if (e.key.keysym.sym == SDLK_SPACE || e.key.keysym.sym == SDLK_RETURN ||
                                  e.key.keysym.sym == SDLK_x) adv = true;
+                        else if (e.key.keysym.sym == SDLK_l) {
+                            showLog = true; showScript = false; historyScroll = 0; drawAll(sayPage, sayEv);
+                        }
                         else if (e.key.keysym.sym == SDLK_a) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
                     }
 #ifdef GFLVN_VITA
@@ -1497,7 +1502,12 @@ int Player::run() {
                             continue;
                         }
                         if (e.cbutton.button == SDL_CONTROLLER_BUTTON_START) { running = false; rc = -2; }
-                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
+                            storyUiHidden = !storyUiHidden;
+                            drawAll(sayPage, sayEv);
+                        }
+                        else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_X ||
+                                 e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
                             showLog = true; showScript = false; historyScroll = 0; drawAll(sayPage, sayEv);
                         }
                         else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_Y) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
@@ -1508,12 +1518,12 @@ int Player::run() {
                         if (showLog || showScript) {
                             showLog = showScript = false; drawAll(sayPage, sayEv); continue;
                         }
-                        int hit = toolbarHit(e.button.x, e.button.y);
+                        int hit = storyUiHidden ? -1 : toolbarHit(e.button.x, e.button.y);
                         if (hit == 0) { running = false; rc = -2; }
                         else if (hit == 1) { showScript = true; showLog = false; scriptScroll = 0; drawAll(sayPage, sayEv); }
                         else if (hit == 2) { showLog = true; showScript = false; historyScroll = 0; drawAll(sayPage, sayEv); }
                         else if (hit == 3) { autoMode = !autoMode; autoPageAt = SDL_GetTicks(); drawAll(sayPage, sayEv); }
-                        else if (autoMode && e.button.x >= 263 && e.button.x <= 365 && e.button.y >= 8 && e.button.y <= 53) {
+                        else if (!storyUiHidden && autoMode && e.button.x >= 263 && e.button.x <= 365 && e.button.y >= 8 && e.button.y <= 53) {
                             autoSpeed = std::clamp(1 + (e.button.x - 263) / 10, 1, 10);
                             drawAll(sayPage, sayEv);
                         }
@@ -1524,7 +1534,7 @@ int Player::run() {
                             showLog = showScript = false; drawAll(sayPage, sayEv); continue;
                         }
                         int fx = (int)(e.tfinger.x * SCREEN_W), fy = (int)(e.tfinger.y * SCREEN_H);
-                        int hit = toolbarHit(fx, fy);
+                        int hit = storyUiHidden ? -1 : toolbarHit(fx, fy);
                         if (hit == 0) { running = false; rc = -2; }
                         else if (hit == 1) { showScript = true; showLog = false; scriptScroll = 0; drawAll(sayPage, sayEv); }
                         else if (hit == 2) { showLog = true; showScript = false; historyScroll = 0; drawAll(sayPage, sayEv); }

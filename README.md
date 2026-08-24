@@ -1,105 +1,178 @@
 # gfl-psvita
 
-Girls' Frontline story player for PS Vita. Converts the game's plaintext story
-scripts (`avgtxt` format, inside Unity TextAssets) into a portable intermediate
-representation, then replays them with a portable C++/SDL2 runtime — desktop
-first, cross-compiled to Vita.
+Unofficial Girls' Frontline story player for PlayStation Vita. The project
+converts the game's `avgtxt` story scripts into a small JSON event stream and
+replays it with a native-resolution (960×544) SDL2 runtime.
 
-Design rationale lives in a local investigation document (not distributed).
+The Vita application includes hierarchical story selection, persistent
+read/progress state, backlog and auto modes, story choices, call presentation,
+scene effects, event artwork, LiveArea metadata, and direct access to a
+seekable single-file asset pack.
 
-## Status
+> [!IMPORTANT]
+> This repository does not contain the extracted story corpus, game artwork,
+> or game audio. Those files live under the ignored `assets/` directory and
+> must be obtained by the user. Generated VPKs contain that user-supplied data
+> and must not be redistributed without permission from the relevant rights
+> holders.
 
-| Step | Description | State |
-|---|---|---|
-| 01 | avgtxt parser -> typed beats (stdlib-only) | done |
-| 02 | asset resolver v0 (BIN/BGM/SE/sprites -> keys + warnings) | done |
-| 02b | bundle download + UnityPy extraction (docker toolchain) | done |
-| 03 | IR exporter: beats -> flat event-stream scene JSON | done |
-| 04 | C++/SDL2 player (desktop + Vita from one source) | done, desktop verified headless |
-| 04+ | C++/SDL2 desktop player, then Vita build | — |
+This is a fan project. It is not affiliated with or endorsed by MICA Team,
+Sunborn, or Darkwinter.
 
-## Layout
+## Project status
 
+The project is alpha software. The complete current English story corpus can
+be imported and packaged, and clean VPK installations boot in Vita3K. Real
+hardware validation is ongoing. Story presentation is still being compared
+against gfStory-en scene by scene; bug reports should include the category,
+chapter, story title, and exact line where a discrepancy occurs.
+
+## Repository layout
+
+```text
+src/gflvn/           Python avgtxt parser, asset resolver, and IR exporter
+runtime/             Shared C++/SDL2 desktop and Vita player
+runtime/sce_sys/     Vita icon and LiveArea resources
+tools/               Import, extraction, chapter, packaging, and build tools
+docker/              Reproducible extraction and VitaSDK environments
+tests/               Test support and golden data
+test_*.py            Unit and local-corpus acceptance tests
+assets/              Generated scenes/media; ignored by Git
+research/            Local upstream data/reference clones; ignored by Git
 ```
-src/gflvn/
-  avgtxt.py    # parser: one script line = one beat; unknown tags degrade, never fail
-  assets.py    # resolver: beat references -> asset keys against the text mirror
-  ir.py        # exporter: beats -> normalized scene JSON (investigation §4 schema)
-runtime/       # SDL2 VN player (single portable main.cpp; builds desktop & Vita)
-docker/
-  Dockerfile         # extraction toolchain image
-  Dockerfile.vita    # VitaSDK cross-compile image
-tools/
-  fetch_bundles.py    # stdlib-only CDN downloader (gf-data-tools resdata manifests)
-  extract_assets.py   # bundle -> pngs/oggs (runs inside docker: UnityPy+magick+vgmstream)
-  build_vita.sh       # cross-builds gflvn.vpk (runs inside gflvn-build-vita)
-test_*.py      # plain assert suites, no framework
-tests/golden/  # golden parse output for -1-1-1.txt
-research/      # local clones of Dimbreath/GirlsFrontlineData + gfStory-en (not committed)
-assets/        # downloaded bundles + extracted assets (not committed: game content)
-docs/          # technical investigation
-```
 
-## Development
+## Requirements
+
+- Python 3.10 or newer
+- Docker, for Unity asset extraction and Vita cross-compilation
+- A legal source of the Girls' Frontline client data
+- For a full English import, local clones at:
 
 ```sh
-pip install -e .
-python3 test_avgtxt.py            # parser: golden + unit
-python3 test_assets.py            # resolver
-python3 test_ir.py                # IR exporter
-python3 test_assets_resolved.py   # every scene asset key resolves on disk (needs extracted assets)
+git clone https://github.com/gf-data-tools/gf-data-us.git research/gf-data-us
+git clone https://github.com/shiropantsu/gfStory-en.git research/gfStory-en
 ```
 
-Asset pipeline (host stays clean; all dependencies live in docker):
+The importer also supports the older
+[`Dimbreath/GirlsFrontlineData`](https://github.com/Dimbreath/GirlsFrontlineData)
+layout as a fallback.
+
+Install the local Python package with:
+
+```sh
+python3 -m pip install -e .
+```
+
+## Importing the story corpus
+
+Build the extraction environment once:
 
 ```sh
 docker build -t gflvn-tools docker/
-python3 tools/fetch_bundles.py <bundleName> ...          # bundles -> assets/bundles/
-docker run --rm -v "$PWD:/work" -w /work gflvn-tools \
-    python3 tools/extract_assets.py -1-1-1               # -> assets/img, assets/aud, assets/manifest.json
 ```
 
-## Running
-
-Desktop (any machine with SDL2; headless smoke test works in docker):
+Import all supported scripts and download their referenced bundles:
 
 ```sh
-# from repo root, after exporting the scene:
-cp assets/1-1-1.ir.json assets/scene.ir.json
-cmake -B build -S runtime && cmake --build build -j
-./build/gflvn assets            # click / Space / Enter to advance
-GFLVN_AUTO=1 ./build/gflvn ...  # auto-advance (smoke test)
+python3 tools/import_chapter.py --all
+docker run --rm -v "$PWD:/work" -w /work gflvn-tools \
+  python3 tools/extract_assets.py
+python3 tools/build_chapter_tree.py
 ```
 
-Controls (in-game toolbar mirrors gfStory-en: Menu / Script / Log / Auto):
+The pipeline writes generated content to `assets/`. Re-running it is
+incremental: existing images/audio are reused, and obsolete scene JSON files
+are removed during a complete import.
 
-| Action | Desktop | Vita |
-|---|---|---|
-| advance text | click / Space / Enter / X | X button / tap |
-| back to chapter menu | Esc or Menu/Script button | START button |
-| history log | Log button | SELECT button |
-| auto-advance toggle | A key or Auto button | Y button or tap Auto |
+Useful partial commands:
+
+```sh
+python3 tools/import_chapter.py '-1-*'       # one filename family
+python3 tools/import_chapter.py --manifest   # rebuild current manifest scenes
+python3 tools/fetch_bundles.py --region us --find avgpicprefabs
 ```
 
-PS Vita (cross-build in docker, no local toolchain):
+Event logos and posters can optionally be prepared from a local directory of
+`<event>/logo.*` and `<event>/poster.*` pairs:
+
+```sh
+python3 -m pip install Pillow
+python3 tools/import_event_art.py /path/to/event-art
+python3 tools/build_chapter_tree.py
+```
+
+## Building
+
+### PlayStation Vita
+
+Build the VitaSDK image, then generate the VPK:
 
 ```sh
 docker build -t gflvn-build-vita -f docker/Dockerfile.vita docker/
 docker run --rm -v "$PWD:/src" gflvn-build-vita /src/tools/build_vita.sh
-# -> build/gflvn.vpk (title id GFLVN00001); install with VitaShell
 ```
 
-Parse any script to JSON:
+The result is `build/gflvn.vpk` with title ID `GFLVN0001`. The VPK contains
+only a handful of installation entries: scenes, PNGs, and OGGs are stored in
+one seekable `data.gfpak`, avoiding thousands of slow small-file writes in
+VitaShell. The pack is read directly at runtime and is not unpacked again on
+first launch.
+
+### Desktop
+
+Install the SDL2, SDL2_image, SDL2_mixer, and SDL2_ttf development packages,
+then run:
 
 ```sh
-gflvn-parse research/GirlsFrontlineData/en-US/asset_textes/avgtxt/-1-1-1.txt
+cmake -S runtime -B build/desktop -DCMAKE_BUILD_TYPE=Release
+cmake --build build/desktop --parallel
+./build/desktop/gflvn assets
 ```
 
-## Data sources
+Set `GFLVN_AUTO=1` for an automated smoke run.
 
-- Text scripts: [Dimbreath/GirlsFrontlineData](https://github.com/Dimbreath/GirlsFrontlineData)
-  (mirrored, all locales). Parser reference:
-  [shiropantsu/gfStory-en](https://github.com/shiropantsu/gfStory-en) (no license;
-  used as reverse-engineering reference only).
-- Art/audio bundles come from the live game CDN (`*.sunborngame.com`, verified working);
-  `tools/fetch_bundles.py` archives them by name from the community resdata manifests.
+## Controls
+
+| Action | Desktop | PS Vita |
+|---|---|---|
+| Advance / confirm | click, Space, Enter, or X | Cross or tap |
+| Back | Escape | Circle |
+| Open history | L | Select |
+| Toggle auto mode | A | Triangle |
+| Mark chapter read/unread | Z | Square |
+| Navigate | arrow keys | D-pad |
+| Fast menu navigation | hold arrow key | hold D-pad |
+
+The on-screen footer shows context-specific controls in chapter selection.
+
+## Tests
+
+Run every test that is available in the current checkout:
+
+```sh
+python3 tools/run_tests.py
+```
+
+Pure parser/runtime metadata tests run in a fresh clone. Corpus acceptance
+tests report `SKIP` until their ignored `research/` or `assets/` prerequisites
+exist. With a complete local import they additionally verify all 3,582 scenes,
+chapter reachability, asset resolution, Vita-sized sprites, and pack inputs.
+
+The GitHub Actions workflow runs the clean-checkout Python suite and compiles
+the desktop runtime on every push and pull request.
+
+## Data and implementation references
+
+- [`gf-data-tools/gf-data-us`](https://github.com/gf-data-tools/gf-data-us):
+  current English text and resource metadata.
+- [`Dimbreath/GirlsFrontlineData`](https://github.com/Dimbreath/GirlsFrontlineData):
+  legacy text mirror supported by the importer.
+- [`shiropantsu/gfStory-en`](https://github.com/shiropantsu/gfStory-en):
+  presentation and chapter-structure reference. It is consumed only from a
+  user-provided local clone and is not vendored here.
+
+## Licensing
+
+Original source code is available under the [MIT License](LICENSE).
+Third-party components, fonts, game materials, names, and trademarks retain
+their own terms; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

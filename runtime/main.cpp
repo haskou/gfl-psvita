@@ -6,6 +6,9 @@
 #include <SDL_ttf.h>
 
 #ifdef GFLVN_VITA
+#include <psp2/apputil.h>
+#include <psp2/common_dialog.h>
+#include <psp2/ime_dialog.h>
 #include <psp2/io/stat.h>
 #endif
 
@@ -1208,6 +1211,21 @@ void Player::setup() {
     // arriving twice as both a finger event and a synthesized mouse click.
     SDL_setenv("VITA_DISABLE_TOUCH_BACK", "1", 1);
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+    SDL_SetHint(SDL_HINT_ENABLE_SCREEN_KEYBOARD, "1");
+
+    // SDL's Vita IME backend expects the application to initialize these
+    // services. Without them SDL_StartTextInput silently fails and leaves a
+    // focused search field with no system keyboard on screen.
+    SceAppUtilInitParam appUtilInit{};
+    SceAppUtilBootParam appUtilBoot{};
+    const int appUtilResult = sceAppUtilInit(&appUtilInit, &appUtilBoot);
+    if (appUtilResult < 0)
+        std::cerr << "WARN: sceAppUtilInit failed: " << appUtilResult << "\n";
+    SceCommonDialogConfigParam dialogConfig;
+    sceCommonDialogConfigParamInit(&dialogConfig);
+    const int dialogResult = sceCommonDialogSetConfigParam(&dialogConfig);
+    if (dialogResult < 0)
+        std::cerr << "WARN: sceCommonDialogSetConfigParam failed: " << dialogResult << "\n";
 #endif
     CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) == 0, "SDL_Init");
     // Character atlases are normally 1024/2048 px square and are reduced to
@@ -1628,6 +1646,38 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
     bool dirty = true;
     bool searchFocused = false;
     std::string query;
+    auto closeSearch = [&](bool cancelSystemKeyboard) {
+#ifdef GFLVN_VITA
+        if (cancelSystemKeyboard && SDL_IsScreenKeyboardShown(win)) {
+            sceImeDialogAbort();
+            // Let SDL collect and terminate the aborted common dialog before
+            // disabling text input; its Vita HideScreenKeyboard cannot abort
+            // a dialog which is still in the running state.
+            SDL_PumpEvents();
+        }
+#else
+        (void)cancelSystemKeyboard;
+#endif
+        SDL_StopTextInput();
+        searchFocused = false;
+        heldDirection = 0;
+        dirty = true;
+    };
+    auto focusSearch = [&]() {
+        if (searchFocused) return;
+        SDL_StartTextInput();
+#ifdef GFLVN_VITA
+        searchFocused = SDL_IsScreenKeyboardShown(win);
+        if (!searchFocused) {
+            std::cerr << "WARN: Vita search keyboard failed to open: " << SDL_GetError() << "\n";
+            SDL_StopTextInput();
+        }
+#else
+        searchFocused = true;
+#endif
+        heldDirection = 0;
+        dirty = true;
+    };
     auto filteredIndices = [&]() {
         std::vector<int> out;
         std::string needle = query;
@@ -1761,10 +1811,10 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
                     query.erase(start);
                     sel = 0; dirty = true;
                 } else if (e.key.keysym.sym == SDLK_UP) {
-                    if (sel == 0 && !searchFocused) { searchFocused = true; heldDirection = 0; SDL_StartTextInput(); dirty = true; }
+                    if (sel == 0 && !searchFocused) focusSearch();
                     else if (!searchFocused) { moveSelection(-1); heldDirection = -1; nextRepeatAt = SDL_GetTicks() + 320; }
                 } else if (e.key.keysym.sym == SDLK_DOWN) {
-                    if (searchFocused) { searchFocused = false; SDL_StopTextInput(); sel = 0; dirty = true; }
+                    if (searchFocused) { closeSearch(true); sel = 0; }
                     else { moveSelection(1); heldDirection = 1; nextRepeatAt = SDL_GetTicks() + 320; }
                 }
                 const std::vector<int> current = filteredIndices();
@@ -1774,7 +1824,7 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
                 }
                 if ((e.key.keysym.sym == SDLK_RETURN || e.key.keysym.sym == SDLK_x) && !searchFocused && actual >= 0) return actual;
                 if (e.key.keysym.sym == SDLK_ESCAPE) {
-                    if (searchFocused) { searchFocused = false; SDL_StopTextInput(); dirty = true; }
+                    if (searchFocused) closeSearch(true);
                     else if (allowBack) return -1;
                 }
             }
@@ -1785,13 +1835,13 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
             if (e.type == SDL_CONTROLLERBUTTONDOWN) {
                 if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_UP) {
                     if (sel == 0 && !searchFocused) {
-                        searchFocused = true; heldDirection = 0; SDL_StartTextInput(); dirty = true;
+                        focusSearch();
                     } else if (!searchFocused) {
                         moveSelection(-1); heldDirection = -1; nextRepeatAt = SDL_GetTicks() + 320;
                     }
                 }
                 if (e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN) {
-                    if (searchFocused) { searchFocused = false; SDL_StopTextInput(); sel = 0; dirty = true; }
+                    if (searchFocused) { closeSearch(true); sel = 0; }
                     else { moveSelection(1); heldDirection = 1; nextRepeatAt = SDL_GetTicks() + 320; }
                 }
                 const std::vector<int> current = filteredIndices();
@@ -1801,7 +1851,7 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
                 }
                 if (e.cbutton.button == SDL_CONTROLLER_BUTTON_A && !searchFocused && actual >= 0) return actual;
                 if (e.cbutton.button == SDL_CONTROLLER_BUTTON_B) {
-                    if (searchFocused) { searchFocused = false; SDL_StopTextInput(); dirty = true; }
+                    if (searchFocused) closeSearch(true);
                     else if (allowBack) return -1;
                     else dirty = true; // Circle at the root is intentionally a no-op.
                 }
@@ -1818,13 +1868,19 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
                 const int pointerY = e.type == SDL_MOUSEBUTTONDOWN
                     ? e.button.y : (int)(e.tfinger.y * SCREEN_H);
                 if (pointerX >= 24 && pointerX < 376 && pointerY >= 60 && pointerY < 94) {
-                    searchFocused = true; SDL_StartTextInput(); dirty = true;
+                    focusSearch();
                 } else {
                     int idx = first + (pointerY - y0) / rowH;
                     if (idx >= 0 && idx < (int)filtered.size()) return filtered[idx];
                 }
             }
         }
+#ifdef GFLVN_VITA
+        // Accept and Cancel are consumed by the system IME. Once SDL has
+        // collected that result, release menu focus even if no key event was
+        // delivered to the application.
+        if (searchFocused && !SDL_IsScreenKeyboardShown(win)) closeSearch(false);
+#endif
         Uint32 now = SDL_GetTicks();
         if (heldDirection != 0 && now >= nextRepeatAt) {
             moveSelection(heldDirection);

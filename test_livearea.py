@@ -25,7 +25,9 @@ def test_livearea_artwork():
     for path, dimensions in expected.items():
         width, height, color_type = png_info(path)
         assert (width, height) == dimensions, f"{path}: {(width, height)} != {dimensions}"
-        assert color_type == 2, f"{path}: expected opaque RGB PNG, color type={color_type}"
+        assert color_type == 3, (
+            f"{path}: Vita shell artwork must be an indexed PNG, color type={color_type}"
+        )
 
 
 def test_livearea_metadata():

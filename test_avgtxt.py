@@ -3,6 +3,7 @@
 import json
 import pathlib
 import sys
+from unittest import SkipTest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent / "src"))
 from gflvn.avgtxt import parse_script
@@ -13,6 +14,8 @@ GOLDEN = ROOT / "tests/golden/-1-1-1.json"
 
 
 def test_golden():
+    if not SRC.is_file():
+        raise SkipTest("requires research/GirlsFrontlineData")
     doc = parse_script(SRC.read_text(encoding="utf-8"), SRC.name)
     expected = json.loads(GOLDEN.read_text(encoding="utf-8"))
     assert doc == expected, "parse output drifted from golden; rerun avgtxt.py --update-golden only if intended"
@@ -52,6 +55,39 @@ def test_multipage_and_cast():
     assert beat["speaker"] == "416"
 
 
+def test_remote_call_is_attached_to_the_tagged_sprite():
+    line = 'NPC-Helian(0)<Speaker>Helian</Speaker><通讯框>;UMP45(0)||:Calling in.'
+    beat = parse_script(line, "t.txt")["beats"][0]
+    assert beat["cast"] == [
+        {"name": "NPC-Helian", "expr": 0, "通讯框": ""},
+        {"name": "UMP45", "expr": 0},
+    ]
+
+
+def test_empty_expression_remains_missing_for_speaker_only_lines():
+    beat = parse_script(
+        "M4A1()<Speaker>M4A1</Speaker>||:Voice only.", "voice.txt"
+    )["beats"][0]
+    assert beat["speaker"] == "M4A1"
+    assert beat["cast"] == [{"name": "M4A1", "expr": None}]
+
+
+def test_effect_appended_to_dialogue_is_not_rendered_as_text():
+    beat = parse_script(" ()||:Camp exterior.<下雪></下雪>", "t.txt")["beats"][0]
+    assert beat["text"] == ["Camp exterior."]
+    assert beat["fx"]["下雪"] == ""
+
+
+def test_duplicated_audio_wrapper_is_recovered():
+    beat = parse_script(" ()||<SE2><SE2>Gunfight</SE2></SE2>:Bang", "t.txt")["beats"][0]
+    assert beat["fx"]["se2"] == "Gunfight"
+
+
+def test_cg_sequence_is_preserved():
+    beat = parse_script(" ()||<CG>55,98,99</CG>:Flashback", "t.txt")["beats"][0]
+    assert beat["fx"]["cg"] == "55,98,99"
+
+
 def test_garbage_never_fatal():
     doc = parse_script("", "t.txt")
     assert doc["beats"] == []
@@ -60,8 +96,5 @@ def test_garbage_never_fatal():
 
 
 if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_"):
-            fn()
-            print(f"PASS {name}")
-    print("all tests passed")
+    from tests.support import run_module_tests
+    run_module_tests(globals())

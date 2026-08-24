@@ -17,7 +17,7 @@ TAG_NAME_RE = re.compile(r"</?([^<>]+)(?:=[^<>]*)?>")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 # Tags promoted to explicit beat fields; everything else lands verbatim in fx.
-VALUED_TAGS = {"bin", "bgm", "se", "se1", "se2", "se3", "分支", "边框"}
+VALUED_TAGS = {"bin", "bgm", "se", "se1", "se2", "se3", "cg", "分支", "边框"}
 FLAG_TAGS = {
     "night", "通讯框", "回忆", "关闭蒙版", "睁眼",
     "黑屏1", "黑屏2", "黑点1", "黑点2", "白屏1", "白屏2", "闪屏",
@@ -38,7 +38,11 @@ def _parse_effects(effects: str):
         if close in effects and full in effects:
             start = effects.index(full)
             end = effects.index(close)
-            values[name] = effects[start + len(full):end]
+            value = effects[start + len(full):end]
+            # A few upstream lines contain `<SE2><SE2>Gunfight</SE2></SE2>`.
+            # Treat the duplicated wrapper as the same single valued tag.
+            value = re.sub(rf"</?{re.escape(name)}>", "", value, flags=re.IGNORECASE)
+            values[name] = value
         else:
             values.setdefault(name, "")
     return values
@@ -58,11 +62,13 @@ def _parse_narrators(narrators: str, warnings: list):
             warnings.append(f"unrecognized narrator `{narrator}`")
             continue
         name, expr = m.group(1), m.group(2)
+        attrs = {tag.lower(): value for tag, value in _parse_effects(narrator).items()
+                 if tag.lower() != "speaker"}
         if "#" in name:  # sprite modifier e.g. Name#隐身
             name, mod = name.split("#", 1)
-            cast.append({"name": name, "expr": int(expr or 0), "mod": mod})
+            cast.append({"name": name, "expr": int(expr or 0), "mod": mod, **attrs})
         else:
-            cast.append({"name": name, "expr": int(expr) if expr else None})
+            cast.append({"name": name, "expr": int(expr) if expr else None, **attrs})
     return cast, display
 
 
@@ -74,6 +80,17 @@ def _split_choices(content: str):
             kind = marker.strip("<>")
             return parts[0], kind, [p for p in parts[1:] if p.strip()]
     return content, "", []
+
+
+def _extract_content_effects(content: str, fx: dict):
+    """Some later scripts append scene effects after the spoken text."""
+    for tag in TAG_NAME_RE.findall(content):
+        key = tag.lower()
+        if tag in FLAG_TAGS or key in FLAG_TAGS:
+            fx[key] = ""
+            content = re.sub(rf"</?{re.escape(tag)}(?:=[^<>]*)?>", "", content,
+                             flags=re.IGNORECASE)
+    return content
 
 
 def parse_line(line: str, warnings: list):
@@ -110,6 +127,7 @@ def parse_line(line: str, warnings: list):
         "fx": fx,
     }
 
+    content = _extract_content_effects(content, fx)
     dialogue, choice_kind, options = _split_choices(content)
     beat["text"] = [p.strip() for p in dialogue.split("+") if p.strip()]
     if choice_kind:

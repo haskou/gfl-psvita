@@ -32,6 +32,18 @@ namespace fs = std::filesystem;
 static const int SCREEN_W = 960;
 static const int SCREEN_H = 544;
 
+static bool isFrontFingerDown(const SDL_Event& event) {
+    if (event.type != SDL_FINGERDOWN) return false;
+#ifdef GFLVN_VITA
+    // SDL Vita assigns touch ID 1 to the front panel and ID 2 to the rear.
+    // Keep this check even though setup disables rear polling as a second
+    // line of defence against accidental story/menu input.
+    return event.tfinger.touchId == 1;
+#else
+    return true;
+#endif
+}
+
 #define CHECK(cond, msg)                                          \
     do {                                                          \
         if (!(cond)) {                                            \
@@ -1162,6 +1174,13 @@ void Player::toggleRead(const std::vector<std::string>& scenes) {
 }
 
 void Player::setup() {
+#ifdef GFLVN_VITA
+    // The rear panel has no function in this VN. Disable it at the SDL Vita
+    // backend before touch initialization, and prevent one front tap from
+    // arriving twice as both a finger event and a synthesized mouse click.
+    SDL_setenv("VITA_DISABLE_TOUCH_BACK", "1", 1);
+    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
+#endif
     CHECK(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) == 0, "SDL_Init");
     // Character atlases are normally 1024/2048 px square and are reduced to
     // Vita's 544 px height. SDL's nearest-neighbour default made their edges
@@ -1359,7 +1378,7 @@ int Player::run() {
                         else if (e.cbutton.button == SDL_CONTROLLER_BUTTON_START) { running = false; rc = -2; }
                     }
 #endif
-                    else if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_FINGERDOWN) {
+                    else if (e.type == SDL_MOUSEBUTTONDOWN || isFrontFingerDown(e)) {
                         int mx = e.type == SDL_MOUSEBUTTONDOWN ? e.button.x : (int)(e.tfinger.x * SCREEN_W);
                         int my = e.type == SDL_MOUSEBUTTONDOWN ? e.button.y : (int)(e.tfinger.y * SCREEN_H);
                         int count = (int)(*choiceEv)["options"].size();
@@ -1452,7 +1471,7 @@ int Player::run() {
                         }
                         else adv = true;
                     }
-                    else if (e.type == SDL_FINGERDOWN) {
+                    else if (isFrontFingerDown(e)) {
                         if (showLog || showScript) {
                             showLog = showScript = false; drawAll(sayPage, sayEv); continue;
                         }
@@ -1759,11 +1778,16 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
                  (heldDirection > 0 && e.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_DOWN)))
                 heldDirection = 0;
 #endif
-            if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-                if (e.button.x >= 24 && e.button.x < 376 && e.button.y >= 60 && e.button.y < 94) {
+            if ((e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) ||
+                isFrontFingerDown(e)) {
+                const int pointerX = e.type == SDL_MOUSEBUTTONDOWN
+                    ? e.button.x : (int)(e.tfinger.x * SCREEN_W);
+                const int pointerY = e.type == SDL_MOUSEBUTTONDOWN
+                    ? e.button.y : (int)(e.tfinger.y * SCREEN_H);
+                if (pointerX >= 24 && pointerX < 376 && pointerY >= 60 && pointerY < 94) {
                     searchFocused = true; SDL_StartTextInput(); dirty = true;
                 } else {
-                    int idx = first + (e.button.y - y0) / rowH;
+                    int idx = first + (pointerY - y0) / rowH;
                     if (idx >= 0 && idx < (int)filtered.size()) return filtered[idx];
                 }
             }

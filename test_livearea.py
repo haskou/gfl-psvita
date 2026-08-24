@@ -33,6 +33,7 @@ def test_livearea_artwork():
 def test_livearea_metadata():
     template = (SCE_SYS / "livearea/contents/template.xml").read_text()
     assert '<livearea style="vd"' in template  # lower-left gate, clear of the cast
+    assert 'content-rev="3"' in template  # invalidate cached layouts on installed Vitas
     assert "<image>bg.png</image>" in template
     assert "<gate>" in template and "<startup-image>startup.png</startup-image>" in template
     assert "<frame" not in template

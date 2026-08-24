@@ -1731,8 +1731,12 @@ int Player::pickScene(const std::vector<std::string>& names, const std::string& 
             Tex* art = getTex(logo);
             if (art->tex) {
                 double scale = std::min(1.0, std::min(300.0 / art->w, 150.0 / art->h));
-                SDL_Rect dst{SCREEN_W - (int)(art->w * scale) - 24, 20,
-                             (int)(art->w * scale), (int)(art->h * scale)};
+                const int logoW = (int)(art->w * scale);
+                const int logoH = (int)(art->h * scale);
+                // Event posters put faces across the upper half. Keep campaign
+                // branding anchored at the bottom-right of the unobscured pane.
+                SDL_Rect dst{SCREEN_W - logoW - 24, SCREEN_H - logoH - 20,
+                             logoW, logoH};
                 SDL_RenderCopy(ren, art->tex, nullptr, &dst);
             }
         }

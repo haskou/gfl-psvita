@@ -134,8 +134,7 @@ public:
         }
         // reset per-scene state
         if (audioReady) {
-            Mix_HaltMusic();
-            if (curMusic) { Mix_FreeMusic(curMusic); curMusic = nullptr; }
+            stopMusic();
             Mix_HaltChannel(-1);
             for (auto* c : liveSfx) Mix_FreeChunk(c);
         }
@@ -211,6 +210,9 @@ private:
     std::vector<std::pair<std::string, std::string>> history;  // name, line
     Uint8 blackAlpha = 0;   // persistent black overlay (black_on)
     Mix_Music* curMusic = nullptr;
+    // SDL_mixer streams Mix_Music from its RWops.  Keep the active packed OGG
+    // in RAM so PNG reads from data.gfpak cannot starve the Vita audio thread.
+    std::vector<uint8_t> musicBuffer;
     std::vector<Mix_Chunk*> liveSfx;
     bool audioReady = false;
     bool callSessionActive = false;
@@ -342,6 +344,7 @@ private:
     void layoutStage();
     void syncStage(const json& entries);
     void drawAll(int sayPage, const json* sayEv);
+    void stopMusic();
     void playMusic(const std::string& id);
     void playSfx(const std::string& id);
     std::vector<std::string> wrapText(const std::string& text, int maxW, TTF_Font* face = nullptr);
@@ -497,6 +500,17 @@ void Player::playSfx(const std::string& id) {
     liveSfx.push_back(chunk);
 }
 
+void Player::stopMusic() {
+    if (!audioReady) return;
+    Mix_HaltMusic();
+    if (curMusic) {
+        Mix_FreeMusic(curMusic);
+        curMusic = nullptr;
+    }
+    // Mix_FreeMusic closes the memory RWops before its backing store goes away.
+    musicBuffer.clear();
+}
+
 void Player::playMusic(const std::string& id) {
     if (!audioReady) return;
     if (id == "bgm_BGM_Pause" || id == "bgm_BGM_PAUSE") {
@@ -509,10 +523,24 @@ void Player::playMusic(const std::string& id) {
     }
     std::string path = assetPath(id);
     if (path.empty()) return;
-    if (curMusic) { Mix_HaltMusic(); Mix_FreeMusic(curMusic); curMusic = nullptr; }
+    stopMusic();
     if (path.rfind("@pack:", 0) == 0) {
-        SDL_RWops* rw = openPacked(path.substr(6));
-        if (rw) curMusic = Mix_LoadMUS_RW(rw, 1);
+        const std::string key = path.substr(6);
+        auto entry = packEntries.find(key);
+        SDL_RWops* packed = openPacked(key);
+        if (packed && entry != packEntries.end() && entry->second.size <= 128 * 1024 * 1024ULL) {
+            musicBuffer.resize((size_t)entry->second.size);
+            const size_t got = SDL_RWread(packed, musicBuffer.data(), 1, musicBuffer.size());
+            SDL_RWclose(packed);
+            if (got == musicBuffer.size() && !musicBuffer.empty()) {
+                SDL_RWops* memory = SDL_RWFromConstMem(musicBuffer.data(), (int)musicBuffer.size());
+                if (memory) curMusic = Mix_LoadMUS_RW(memory, 1);
+            } else {
+                musicBuffer.clear();
+            }
+        } else if (packed) {
+            SDL_RWclose(packed);
+        }
     } else {
         curMusic = Mix_LoadMUS(path.c_str());
     }
@@ -1190,7 +1218,9 @@ void Player::setup() {
                                   SCREEN_W, SCREEN_H, 0)) != nullptr, "window");
     CHECK((ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC)) != nullptr ||
           (ren = SDL_CreateRenderer(win, -1, 0)) != nullptr, "renderer");
-    audioReady = Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 2048) == 0;
+    // 4096 samples (~93 ms at 44.1 kHz) absorbs short Vita PNG decode spikes
+    // without making this non-interactive VN feel laggy.
+    audioReady = Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096) == 0;
     if (!audioReady) std::cerr << "WARN: audio disabled: " << Mix_GetError() << "\n";
     CHECK(TTF_Init() == 0, "ttf");
     font = TTF_OpenFont(fontPath.c_str(), 18);      // CSS 1.1em at 16px
@@ -1577,8 +1607,7 @@ int Player::run() {
     // Unlike gfStory's overlaid web drawer, there is no player behind that
     // screen, so carrying its BGM into the menu is both wrong and wasteful.
     if (audioReady) {
-        Mix_HaltMusic();
-        if (curMusic) { Mix_FreeMusic(curMusic); curMusic = nullptr; }
+        stopMusic();
     }
     std::cout << "scene finished\n";
     return rc;
